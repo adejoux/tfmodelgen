@@ -1,0 +1,158 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Example API", "version": "1.0.0" },
+  "paths": {
+    "/projects/{id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/ProjectID" }
+      ],
+      "get": {
+        "operationId": "getProject",
+        "summary": "Get a project.",
+        "parameters": [
+          {
+            "name": "expand",
+            "in": "query",
+            "description": "Include the members in the response.",
+            "schema": { "type": "boolean" }
+          },
+          {
+            "name": "X-Request-ID",
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/ProjectResponse" },
+          "404": { "description": "Not found." }
+        }
+      }
+    },
+    "/projects": {
+      "get": {
+        "operationId": "listProjects",
+        "summary": "List projects.",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "owner", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projects.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ProjectSummary" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "ProjectID": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Project identifier.",
+        "schema": { "type": "string" }
+      }
+    },
+    "responses": {
+      "ProjectResponse": {
+        "description": "The project.",
+        "content": {
+          "application/json; charset=utf-8": {
+            "schema": { "$ref": "#/components/schemas/Project" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Timestamps": {
+        "type": "object",
+        "properties": {
+          "createdAt": { "type": "string", "format": "date-time", "description": "Creation time." },
+          "updatedAt": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
+      "Project": {
+        "description": "A project.",
+        "allOf": [
+          { "$ref": "#/components/schemas/Timestamps" },
+          {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string", "description": "Display name." },
+              "description": { "type": ["string", "null"] },
+              "status": { "type": "string", "enum": ["active", "archived"] },
+              "replicas": { "type": "integer", "format": "int32" },
+              "cpu": { "type": "number" },
+              "public": { "type": "boolean" },
+              "count": { "type": "integer", "description": "Number of deployments." },
+              "apiKey": { "type": "string", "format": "password" },
+              "tags": { "type": "array", "items": { "type": "string" } },
+              "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+              "owner": {
+                "oneOf": [ { "$ref": "#/components/schemas/User" }, { "type": "null" } ]
+              },
+              "members": { "type": "array", "items": { "$ref": "#/components/schemas/User" } },
+              "settings": {
+                "type": "object",
+                "properties": {
+                  "retentionDays": { "type": "integer" },
+                  "notifications": {
+                    "type": "object",
+                    "properties": {
+                      "email": { "type": "boolean" },
+                      "webhooks": { "type": "array", "items": { "type": "string", "format": "uri" } }
+                    }
+                  }
+                }
+              },
+              "quotas": {
+                "type": "object",
+                "additionalProperties": { "$ref": "#/components/schemas/Quota" }
+              },
+              "matrix": {
+                "type": "array",
+                "items": { "type": "array", "items": { "type": ["integer", "null"] } }
+              },
+              "metadata": { "type": "object", "description": "Free-form metadata." },
+              "parent": { "$ref": "#/components/schemas/Project" },
+              "value": { "oneOf": [ { "type": "string" }, { "type": "integer" } ] },
+              "secret": { "type": "string", "writeOnly": true }
+            }
+          }
+        ]
+      },
+      "User": {
+        "type": "object",
+        "description": "A user.",
+        "properties": {
+          "id": { "type": "string" },
+          "email": { "type": "string", "format": "email" },
+          "displayName": { "type": ["string", "null"] }
+        }
+      },
+      "Quota": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer" },
+          "used": { "type": "integer" }
+        }
+      },
+      "ProjectSummary": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "owner": { "type": "string" }
+        }
+      }
+    }
+  }
+}
