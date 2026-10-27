@@ -5,11 +5,9 @@ package e2e
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	dsschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -43,11 +41,209 @@ type ProjectAPI struct {
 	Value       json.RawMessage             `json:"value"`
 }
 
+// Values of ProjectAPI.Status.
+const (
+	ProjectStatusActive   = "active"
+	ProjectStatusArchived = "archived"
+)
+
+// GetCreatedAt returns CreatedAt, or "" when it is absent.
+func (x *ProjectAPI) GetCreatedAt() string {
+	if x == nil || x.CreatedAt == nil {
+		return ""
+	}
+	return *x.CreatedAt
+}
+
+// GetUpdatedAt returns UpdatedAt, or "" when it is absent.
+func (x *ProjectAPI) GetUpdatedAt() string {
+	if x == nil || x.UpdatedAt == nil {
+		return ""
+	}
+	return *x.UpdatedAt
+}
+
+// GetID returns ID, or "" when it is absent.
+func (x *ProjectAPI) GetID() string {
+	if x == nil || x.ID == nil {
+		return ""
+	}
+	return *x.ID
+}
+
+// GetName returns Name, or "" when it is absent.
+func (x *ProjectAPI) GetName() string {
+	if x == nil || x.Name == nil {
+		return ""
+	}
+	return *x.Name
+}
+
+// GetDescription returns Description, or "" when it is absent.
+func (x *ProjectAPI) GetDescription() string {
+	if x == nil || x.Description == nil {
+		return ""
+	}
+	return *x.Description
+}
+
+// GetStatus returns Status, or "" when it is absent.
+func (x *ProjectAPI) GetStatus() string {
+	if x == nil || x.Status == nil {
+		return ""
+	}
+	return *x.Status
+}
+
+// GetReplicas returns Replicas, or 0 when it is absent.
+func (x *ProjectAPI) GetReplicas() int64 {
+	if x == nil || x.Replicas == nil {
+		return 0
+	}
+	return *x.Replicas
+}
+
+// GetCPU returns CPU, or 0 when it is absent.
+func (x *ProjectAPI) GetCPU() float64 {
+	if x == nil || x.CPU == nil {
+		return 0
+	}
+	return *x.CPU
+}
+
+// GetPublic returns Public, or false when it is absent.
+func (x *ProjectAPI) GetPublic() bool {
+	if x == nil || x.Public == nil {
+		return false
+	}
+	return *x.Public
+}
+
+// GetCount returns Count, or 0 when it is absent.
+func (x *ProjectAPI) GetCount() int64 {
+	if x == nil || x.Count == nil {
+		return 0
+	}
+	return *x.Count
+}
+
+// GetAPIKey returns APIKey, or "" when it is absent.
+func (x *ProjectAPI) GetAPIKey() string {
+	if x == nil || x.APIKey == nil {
+		return ""
+	}
+	return *x.APIKey
+}
+
+// GetTags returns Tags, or nil when x is nil.
+func (x *ProjectAPI) GetTags() []string {
+	if x == nil {
+		return nil
+	}
+	return x.Tags
+}
+
+// GetLabels returns Labels, or nil when x is nil.
+func (x *ProjectAPI) GetLabels() map[string]string {
+	if x == nil {
+		return nil
+	}
+	return x.Labels
+}
+
+// GetOwner returns Owner, or nil when x is nil.
+func (x *ProjectAPI) GetOwner() *ProjectUserAPI {
+	if x == nil {
+		return nil
+	}
+	return x.Owner
+}
+
+// GetMembers returns Members, or nil when x is nil.
+func (x *ProjectAPI) GetMembers() []*ProjectUserAPI {
+	if x == nil {
+		return nil
+	}
+	return x.Members
+}
+
+// GetSettings returns Settings, or nil when x is nil.
+func (x *ProjectAPI) GetSettings() *ProjectSettingsAPI {
+	if x == nil {
+		return nil
+	}
+	return x.Settings
+}
+
+// GetQuotas returns Quotas, or nil when x is nil.
+func (x *ProjectAPI) GetQuotas() map[string]*ProjectQuotaAPI {
+	if x == nil {
+		return nil
+	}
+	return x.Quotas
+}
+
+// GetMatrix returns Matrix, or nil when x is nil.
+func (x *ProjectAPI) GetMatrix() [][]*int64 {
+	if x == nil {
+		return nil
+	}
+	return x.Matrix
+}
+
+// GetMetadata returns Metadata, or nil when x is nil.
+func (x *ProjectAPI) GetMetadata() json.RawMessage {
+	if x == nil {
+		return nil
+	}
+	return x.Metadata
+}
+
+// GetParent returns Parent, or nil when x is nil.
+func (x *ProjectAPI) GetParent() json.RawMessage {
+	if x == nil {
+		return nil
+	}
+	return x.Parent
+}
+
+// GetValue returns Value, or nil when x is nil.
+func (x *ProjectAPI) GetValue() json.RawMessage {
+	if x == nil {
+		return nil
+	}
+	return x.Value
+}
+
 // ProjectUserAPI is a nested object of the GET /projects/{id} response.
 type ProjectUserAPI struct {
 	ID          *string `json:"id"`
 	Email       *string `json:"email"`
 	DisplayName *string `json:"displayName"`
+}
+
+// GetID returns ID, or "" when it is absent.
+func (x *ProjectUserAPI) GetID() string {
+	if x == nil || x.ID == nil {
+		return ""
+	}
+	return *x.ID
+}
+
+// GetEmail returns Email, or "" when it is absent.
+func (x *ProjectUserAPI) GetEmail() string {
+	if x == nil || x.Email == nil {
+		return ""
+	}
+	return *x.Email
+}
+
+// GetDisplayName returns DisplayName, or "" when it is absent.
+func (x *ProjectUserAPI) GetDisplayName() string {
+	if x == nil || x.DisplayName == nil {
+		return ""
+	}
+	return *x.DisplayName
 }
 
 // ProjectSettingsNotificationsAPI is a nested object of the GET /projects/{id} response.
@@ -56,10 +252,42 @@ type ProjectSettingsNotificationsAPI struct {
 	Webhooks []string `json:"webhooks"`
 }
 
+// GetEmail returns Email, or false when it is absent.
+func (x *ProjectSettingsNotificationsAPI) GetEmail() bool {
+	if x == nil || x.Email == nil {
+		return false
+	}
+	return *x.Email
+}
+
+// GetWebhooks returns Webhooks, or nil when x is nil.
+func (x *ProjectSettingsNotificationsAPI) GetWebhooks() []string {
+	if x == nil {
+		return nil
+	}
+	return x.Webhooks
+}
+
 // ProjectSettingsAPI is a nested object of the GET /projects/{id} response.
 type ProjectSettingsAPI struct {
 	RetentionDays *int64                           `json:"retentionDays"`
 	Notifications *ProjectSettingsNotificationsAPI `json:"notifications"`
+}
+
+// GetRetentionDays returns RetentionDays, or 0 when it is absent.
+func (x *ProjectSettingsAPI) GetRetentionDays() int64 {
+	if x == nil || x.RetentionDays == nil {
+		return 0
+	}
+	return *x.RetentionDays
+}
+
+// GetNotifications returns Notifications, or nil when x is nil.
+func (x *ProjectSettingsAPI) GetNotifications() *ProjectSettingsNotificationsAPI {
+	if x == nil {
+		return nil
+	}
+	return x.Notifications
 }
 
 // ProjectQuotaAPI is a nested object of the GET /projects/{id} response.
@@ -68,9 +296,55 @@ type ProjectQuotaAPI struct {
 	Used  *int64 `json:"used"`
 }
 
-// ProjectModel is the Terraform model of the GET /projects/{id} response.
+// GetLimit returns Limit, or 0 when it is absent.
+func (x *ProjectQuotaAPI) GetLimit() int64 {
+	if x == nil || x.Limit == nil {
+		return 0
+	}
+	return *x.Limit
+}
+
+// GetUsed returns Used, or 0 when it is absent.
+func (x *ProjectQuotaAPI) GetUsed() int64 {
+	if x == nil || x.Used == nil {
+		return 0
+	}
+	return *x.Used
+}
+
+// DecodeProjectAPI decodes the body of a GET /projects/{id} response.
+func DecodeProjectAPI(body []byte) (*ProjectAPI, error) {
+	var out ProjectAPI
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decoding GET /projects/{id} response: %w", err)
+	}
+	return &out, nil
+}
+
+// ProjectPath returns the request path of GET /projects/{id}, with escaped parameters.
+func ProjectPath(id string) string {
+	return "/projects/" + url.PathEscape(id)
+}
+
+// ProjectQuery holds the query parameters of GET /projects/{id}. Nil fields are not sent.
+type ProjectQuery struct {
+	// Include the members in the response.
+	Expand *bool
+}
+
+// Values encodes the parameters for the request URL.
+func (q ProjectQuery) Values() url.Values {
+	v := url.Values{}
+	if q.Expand != nil {
+		v.Set("expand", strconv.FormatBool(*q.Expand))
+	}
+	return v
+}
+
+// ProjectModel holds the Terraform attributes read from the GET /projects/{id} response.
+// Embed it by value in a resource or data source model; FromAPI is then
+// promoted to that model.
 type ProjectModel struct {
-	Expand      types.Bool    `tfsdk:"expand"`
 	CreatedAt   types.String  `tfsdk:"created_at"`
 	UpdatedAt   types.String  `tfsdk:"updated_at"`
 	ID          types.String  `tfsdk:"id"`
@@ -152,21 +426,10 @@ func (ProjectQuotaModel) AttrTypes() map[string]attr.Type {
 	}
 }
 
-// ProjectDataSourceSchema returns the data source schema of the GET /projects/{id} response.
-func ProjectDataSourceSchema() dsschema.Schema {
-	return dsschema.Schema{
-		Description: "Get a project.",
-		Attributes:  ProjectDataSourceAttributes(),
-	}
-}
-
-// ProjectDataSourceAttributes returns the attributes of ProjectModel, to embed them in another schema.
+// ProjectDataSourceAttributes returns the data source attributes of ProjectModel, all computed.
+// Merge them into the schema of the data source that embeds ProjectModel.
 func ProjectDataSourceAttributes() map[string]dsschema.Attribute {
 	return map[string]dsschema.Attribute{
-		"expand": dsschema.BoolAttribute{
-			Optional:    true,
-			Description: "Include the members in the response.",
-		},
 		"created_at": dsschema.StringAttribute{
 			Computed:    true,
 			Description: "Creation time.",
@@ -175,8 +438,7 @@ func ProjectDataSourceAttributes() map[string]dsschema.Attribute {
 			Computed: true,
 		},
 		"id": dsschema.StringAttribute{
-			Required:    true,
-			Description: "Project identifier.",
+			Computed: true,
 		},
 		"name": dsschema.StringAttribute{
 			Computed:    true,
@@ -298,21 +560,10 @@ func projectQuotaDataSourceAttributes() map[string]dsschema.Attribute {
 	}
 }
 
-// ProjectResourceSchema returns the resource schema of the GET /projects/{id} response.
-func ProjectResourceSchema() rsschema.Schema {
-	return rsschema.Schema{
-		Description: "Get a project.",
-		Attributes:  ProjectResourceAttributes(),
-	}
-}
-
-// ProjectResourceAttributes returns the attributes of ProjectModel, to embed them in another schema.
+// ProjectResourceAttributes returns the resource attributes of ProjectModel, all computed.
+// Merge them into the schema of the resource that embeds ProjectModel.
 func ProjectResourceAttributes() map[string]rsschema.Attribute {
 	return map[string]rsschema.Attribute{
-		"expand": rsschema.BoolAttribute{
-			Optional:    true,
-			Description: "Include the members in the response.",
-		},
 		"created_at": rsschema.StringAttribute{
 			Computed:    true,
 			Description: "Creation time.",
@@ -321,8 +572,7 @@ func ProjectResourceAttributes() map[string]rsschema.Attribute {
 			Computed: true,
 		},
 		"id": rsschema.StringAttribute{
-			Required:    true,
-			Description: "Project identifier.",
+			Computed: true,
 		},
 		"name": rsschema.StringAttribute{
 			Computed:    true,
@@ -444,17 +694,7 @@ func projectQuotaResourceAttributes() map[string]rsschema.Attribute {
 	}
 }
 
-// DecodeProjectAPI decodes the body of a GET /projects/{id} response.
-func DecodeProjectAPI(body []byte) (*ProjectAPI, error) {
-	var out ProjectAPI
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fmt.Errorf("decoding GET /projects/{id} response: %w", err)
-	}
-	return &out, nil
-}
-
-// FromAPI sets the model from a GET /projects/{id} response. Attributes that only
-// carry request parameters are left untouched.
+// FromAPI sets the attributes of the model from a GET /projects/{id} response.
 func (m *ProjectModel) FromAPI(ctx context.Context, in *ProjectAPI) diag.Diagnostics {
 	var diags diag.Diagnostics
 	if in == nil {
@@ -673,23 +913,4 @@ func projectQuotaFromAPI(ctx context.Context, in *ProjectQuotaAPI) (types.Object
 	})
 	diags.Append(d...)
 	return v, diags
-}
-
-// APIPath returns the request path of GET /projects/{id} built from the model.
-func (m *ProjectModel) APIPath() (string, error) {
-	p := "/projects/{id}"
-	if m.ID.IsNull() || m.ID.IsUnknown() {
-		return "", errors.New("attribute \"id\" is required to build the request path")
-	}
-	p = strings.ReplaceAll(p, "{id}", url.PathEscape(m.ID.ValueString()))
-	return p, nil
-}
-
-// APIQuery returns the query parameters of GET /projects/{id} set in the model.
-func (m *ProjectModel) APIQuery() url.Values {
-	q := url.Values{}
-	if !m.Expand.IsNull() && !m.Expand.IsUnknown() {
-		q.Set("expand", strconv.FormatBool(m.Expand.ValueBool()))
-	}
-	return q
 }

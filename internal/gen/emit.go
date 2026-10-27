@@ -22,8 +22,8 @@ const (
 // EmitOptions configures Emit.
 type EmitOptions struct {
 	Package  string
-	SpecName string // shown in the generated header
-	Schema   SchemaKind
+	SpecName string     // shown in the generated header
+	Schema   SchemaKind // default SchemaResource
 }
 
 const (
@@ -37,9 +37,11 @@ const (
 var importAliases = map[string]string{fwDSSchema: "dsschema", fwRSSchema: "rsschema"}
 
 type emitter struct {
-	ep      *Endpoint
-	buf     bytes.Buffer
-	imports map[string]bool
+	ep        *Endpoint
+	buf       bytes.Buffer
+	imports   map[string]bool
+	reachable map[*ObjectType]bool // nested objects behind exposed attributes
+	consts    map[string]bool
 }
 
 func (e *emitter) p(format string, args ...any) {
@@ -55,39 +57,42 @@ func Emit(ep *Endpoint, o EmitOptions) ([]byte, error) {
 		o.Package = "provider"
 	}
 	if o.Schema == "" {
-		o.Schema = SchemaDataSource
+		o.Schema = SchemaResource
 	}
-	e := &emitter{ep: ep, imports: map[string]bool{}}
+	switch o.Schema {
+	case SchemaNone, SchemaDataSource, SchemaResource, SchemaBoth:
+	default:
+		return nil, fmt.Errorf("unknown schema kind %q", o.Schema)
+	}
+	e := &emitter{ep: ep, imports: map[string]bool{}, consts: map[string]bool{}}
+	e.findReachable()
 	e.use("context")
 	e.use("encoding/json")
 	e.use("fmt")
 	e.use(fwDiag)
 	e.use(fwTypes)
 
+	// Go side: API structs and request helpers.
 	for _, obj := range ep.Objects {
 		e.apiType(obj)
 	}
-	for _, obj := range ep.Objects {
+	e.decode()
+	e.requestHelpers()
+
+	// Terraform side: models, schemas and conversions.
+	for _, obj := range e.models() {
 		e.modelType(obj)
 	}
-	switch o.Schema {
-	case SchemaDataSource:
+	if o.Schema == SchemaDataSource || o.Schema == SchemaBoth {
 		e.schemas(fwDSSchema, "DataSource")
-	case SchemaResource:
-		e.schemas(fwRSSchema, "Resource")
-	case SchemaBoth:
-		e.schemas(fwDSSchema, "DataSource")
-		e.schemas(fwRSSchema, "Resource")
-	case SchemaNone:
-	default:
-		return nil, fmt.Errorf("unknown schema kind %q", o.Schema)
 	}
-	e.decode()
+	if o.Schema == SchemaResource || o.Schema == SchemaBoth {
+		e.schemas(fwRSSchema, "Resource")
+	}
 	e.fromAPI()
-	for _, obj := range ep.Objects[1:] {
+	for _, obj := range e.models()[1:] {
 		e.objectFromAPI(obj)
 	}
-	e.requestHelpers()
 
 	var out bytes.Buffer
 	source := ""
@@ -136,12 +141,56 @@ func (e *emitter) importBlock() string {
 	return b.String()
 }
 
-// ---------------------------------------------------------------------------
-// Types
-
 func (e *emitter) root() *ObjectType { return e.ep.Objects[0] }
 
 func (e *emitter) endpoint() string { return e.ep.Method + " " + e.ep.Path }
+
+// exposed returns the fields of obj that are Terraform attributes.
+func (e *emitter) exposed(obj *ObjectType) []*Field {
+	var out []*Field
+	for _, f := range obj.Fields {
+		if f.Exposed || obj != e.root() {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func (e *emitter) findReachable() {
+	e.reachable = map[*ObjectType]bool{}
+	var walk func(n *Node)
+	walk = func(n *Node) {
+		switch n.Kind {
+		case KObject:
+			if e.reachable[n.Object] {
+				return
+			}
+			e.reachable[n.Object] = true
+			for _, f := range n.Object.Fields {
+				walk(f.Node)
+			}
+		case KList, KMap:
+			walk(n.Elem)
+		}
+	}
+	for _, f := range e.exposed(e.root()) {
+		walk(f.Node)
+	}
+}
+
+// models returns the root and the nested objects that need a Terraform model.
+func (e *emitter) models() []*ObjectType {
+	out := []*ObjectType{e.root()}
+	for _, obj := range e.ep.Objects[1:] {
+		if e.reachable[obj] {
+			out = append(out, obj)
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Go side
 
 // goAPIType is the Go type of a value in the API structs. Scalars are
 // pointers at field level so that absent and null values stay distinct from
@@ -149,14 +198,8 @@ func (e *emitter) endpoint() string { return e.ep.Method + " " + e.ep.Path }
 func (e *emitter) goAPIType(n *Node, field bool) string {
 	ptr := field || n.Nullable
 	switch n.Kind {
-	case KString:
-		return star(ptr) + "string"
-	case KInt:
-		return star(ptr) + "int64"
-	case KFloat:
-		return star(ptr) + "float64"
-	case KBool:
-		return star(ptr) + "bool"
+	case KString, KInt, KFloat, KBool:
+		return star(ptr) + scalarGoType(n.Kind)
 	case KJSON:
 		return "json.RawMessage"
 	case KObject:
@@ -169,6 +212,14 @@ func (e *emitter) goAPIType(n *Node, field bool) string {
 	panic("unknown kind")
 }
 
+func scalarGoType(k Kind) string {
+	return map[Kind]string{KString: "string", KInt: "int64", KFloat: "float64", KBool: "bool"}[k]
+}
+
+func zeroValue(k Kind) string {
+	return map[Kind]string{KString: `""`, KInt: "0", KFloat: "0", KBool: "false"}[k]
+}
+
 func star(ptr bool) string {
 	if ptr {
 		return "*"
@@ -178,7 +229,7 @@ func star(ptr bool) string {
 
 func (e *emitter) apiType(obj *ObjectType) {
 	if obj == e.root() && e.ep.Wrapped {
-		f := obj.Fields[len(obj.Fields)-1]
+		f := obj.Fields[0]
 		e.p("// %sAPI is the body of the %s response (%s).", obj.Name, e.endpoint(), e.ep.Status)
 		e.p("type %sAPI %s", obj.Name, e.goAPIType(f.Node, false))
 		e.p("")
@@ -191,13 +242,175 @@ func (e *emitter) apiType(obj *ObjectType) {
 	}
 	e.p("type %sAPI struct {", obj.Name)
 	for _, f := range obj.Fields {
-		if f.FromResponse {
-			e.p("%s %s `json:\"%s\"`", f.GoName, e.goAPIType(f.Node, true), f.JSONName)
-		}
+		e.p("%s %s `json:\"%s\"`", f.GoName, e.goAPIType(f.Node, true), f.JSONName)
 	}
 	e.p("}")
 	e.p("")
+	e.enumConsts(obj)
+	e.getters(obj)
 }
+
+// enumConsts writes the values of string enums.
+func (e *emitter) enumConsts(obj *ObjectType) {
+	for _, f := range obj.Fields {
+		if f.Node.Kind != KString || len(f.Node.Enum) == 0 {
+			continue
+		}
+		e.p("// Values of %sAPI.%s.", obj.Name, f.GoName)
+		e.p("const (")
+		for _, v := range f.Node.Enum {
+			suffix := GoName(v)
+			if v == "" {
+				suffix = "Empty"
+			}
+			name := obj.Name + f.GoName + suffix
+			base := name
+			for i := 2; e.consts[name]; i++ {
+				name = fmt.Sprintf("%s%d", base, i)
+			}
+			e.consts[name] = true
+			e.p("%s = %s", name, strconv.Quote(v))
+		}
+		e.p(")")
+		e.p("")
+	}
+}
+
+// getters writes nil-safe accessors, so that a.GetStatus() works on a nil
+// response or an absent field.
+func (e *emitter) getters(obj *ObjectType) {
+	fields := map[string]bool{}
+	for _, f := range obj.Fields {
+		fields[f.GoName] = true
+	}
+	for _, f := range obj.Fields {
+		name := "Get" + f.GoName
+		if fields[name] {
+			continue
+		}
+		switch f.Node.Kind {
+		case KString, KInt, KFloat, KBool:
+			e.p("// %s returns %s, or %s when it is absent.", name, f.GoName, zeroValue(f.Node.Kind))
+			e.p("func (x *%sAPI) %s() %s {", obj.Name, name, scalarGoType(f.Node.Kind))
+			e.p("if x == nil || x.%s == nil {", f.GoName)
+			e.p("return %s", zeroValue(f.Node.Kind))
+			e.p("}")
+			e.p("return *x.%s", f.GoName)
+		default:
+			e.p("// %s returns %s, or nil when x is nil.", name, f.GoName)
+			e.p("func (x *%sAPI) %s() %s {", obj.Name, name, e.goAPIType(f.Node, true))
+			e.p("if x == nil {")
+			e.p("return nil")
+			e.p("}")
+			e.p("return x.%s", f.GoName)
+		}
+		e.p("}")
+		e.p("")
+	}
+}
+
+func (e *emitter) decode() {
+	root := e.root()
+	e.p("// Decode%sAPI decodes the body of a %s response.", root.Name, e.endpoint())
+	e.p("func Decode%sAPI(body []byte) (*%sAPI, error) {", root.Name, root.Name)
+	e.p("var out %sAPI", root.Name)
+	e.p("if err := json.Unmarshal(body, &out); err != nil {")
+	e.p("return nil, fmt.Errorf(%q, err)", "decoding "+e.endpoint()+" response: %w")
+	e.p("}")
+	e.p("return &out, nil")
+	e.p("}")
+	e.p("")
+}
+
+// requestHelpers writes <Name>Path and, with query parameters, <Name>Query.
+func (e *emitter) requestHelpers() {
+	root := e.root()
+	byName := map[string]*Param{}
+	var query []*Param
+	for _, p := range e.ep.Params {
+		if p.In == "path" {
+			byName[p.Name] = p
+		} else {
+			query = append(query, p)
+		}
+	}
+
+	var args, parts []string
+	rest := e.ep.Path
+	for {
+		i := strings.Index(rest, "{")
+		j := strings.Index(rest[max(i, 0):], "}")
+		if i < 0 || j < 0 {
+			break
+		}
+		j += i
+		if i > 0 {
+			parts = append(parts, strconv.Quote(rest[:i]))
+		}
+		p := byName[rest[i+1:j]]
+		args = append(args, p.ArgName+" "+scalarGoType(p.Node.Kind))
+		e.use("net/url")
+		parts = append(parts, "url.PathEscape("+e.formatValue(p.ArgName, p.Node.Kind)+")")
+		rest = rest[j+1:]
+	}
+	if rest != "" || len(parts) == 0 {
+		parts = append(parts, strconv.Quote(rest))
+	}
+	e.p("// %sPath returns the request path of %s, with escaped parameters.", root.Name, e.endpoint())
+	e.p("func %sPath(%s) string {", root.Name, strings.Join(args, ", "))
+	e.p("return %s", strings.Join(parts, " + "))
+	e.p("}")
+	e.p("")
+
+	if len(query) == 0 {
+		return
+	}
+	e.use("net/url")
+	e.p("// %sQuery holds the query parameters of %s. Nil fields are not sent.", root.Name, e.endpoint())
+	e.p("type %sQuery struct {", root.Name)
+	for _, p := range query {
+		if p.Desc != "" {
+			e.p("// %s", strings.Join(strings.Fields(p.Desc), " "))
+		}
+		e.p("%s %s%s", p.GoName, star(!p.Required), scalarGoType(p.Node.Kind))
+	}
+	e.p("}")
+	e.p("")
+	e.p("// Values encodes the parameters for the request URL.")
+	e.p("func (q %sQuery) Values() url.Values {", root.Name)
+	e.p("v := url.Values{}")
+	for _, p := range query {
+		if p.Required {
+			e.p("v.Set(%q, %s)", p.Name, e.formatValue("q."+p.GoName, p.Node.Kind))
+			continue
+		}
+		e.p("if q.%s != nil {", p.GoName)
+		e.p("v.Set(%q, %s)", p.Name, e.formatValue("*q."+p.GoName, p.Node.Kind))
+		e.p("}")
+	}
+	e.p("return v")
+	e.p("}")
+	e.p("")
+}
+
+func (e *emitter) formatValue(expr string, k Kind) string {
+	switch k {
+	case KInt:
+		e.use("strconv")
+		return "strconv.FormatInt(" + expr + ", 10)"
+	case KFloat:
+		e.use("strconv")
+		return "strconv.FormatFloat(" + expr + ", 'f', -1, 64)"
+	case KBool:
+		e.use("strconv")
+		return "strconv.FormatBool(" + expr + ")"
+	default:
+		return expr
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Terraform side
 
 func modelGoType(n *Node) string {
 	switch n.Kind {
@@ -241,12 +454,14 @@ func (e *emitter) attrType(n *Node) string {
 
 func (e *emitter) modelType(obj *ObjectType) {
 	if obj == e.root() {
-		e.p("// %sModel is the Terraform model of the %s response.", obj.Name, e.endpoint())
+		e.p("// %sModel holds the Terraform attributes read from the %s response.", obj.Name, e.endpoint())
+		e.p("// Embed it by value in a resource or data source model; FromAPI is then")
+		e.p("// promoted to that model.")
 	} else {
 		e.p("// %sModel is the Terraform model of %sAPI.", obj.Name, obj.Name)
 	}
 	e.p("type %sModel struct {", obj.Name)
-	for _, f := range obj.Fields {
+	for _, f := range e.exposed(obj) {
 		e.p("%s %s `tfsdk:%q`", f.GoName, modelGoType(f.Node), f.TFName)
 	}
 	e.p("}")
@@ -266,34 +481,18 @@ func (e *emitter) modelType(obj *ObjectType) {
 	e.p("")
 }
 
-// ---------------------------------------------------------------------------
-// Schemas
-
 func (e *emitter) schemas(pkgPath, kind string) {
 	e.use(pkgPath)
 	pkg := importAliases[pkgPath]
 	root := e.root()
 	label := map[string]string{"DataSource": "data source", "Resource": "resource"}[kind]
 
-	e.p("// %s%sSchema returns the %s schema of the %s response.", root.Name, kind, label, e.endpoint())
-	e.p("func %s%sSchema() %s.Schema {", root.Name, kind, pkg)
-	e.p("return %s.Schema{", pkg)
-	if root.Desc != "" {
-		e.p("Description: %s,", strconv.Quote(root.Desc))
-	}
-	e.p("Attributes: %s%sAttributes(),", root.Name, kind)
-	e.p("}")
-	e.p("}")
-	e.p("")
-
-	for i, obj := range e.ep.Objects {
-		fn := e.attrsFunc(obj, kind)
-		if i == 0 {
-			e.p("// %s returns the attributes of %sModel, to embed them in another schema.", fn, obj.Name)
-		}
-		e.p("func %s() map[string]%s.Attribute {", fn, pkg)
+	e.p("// %s%sAttributes returns the %s attributes of %sModel, all computed.", root.Name, kind, label, root.Name)
+	e.p("// Merge them into the schema of the %s that embeds %sModel.", label, root.Name)
+	for _, obj := range e.models() {
+		e.p("func %s() map[string]%s.Attribute {", e.attrsFunc(obj, kind), pkg)
 		e.p("return map[string]%s.Attribute{", pkg)
-		for _, f := range obj.Fields {
+		for _, f := range e.exposed(obj) {
 			e.p("%q: %s,", f.TFName, e.attribute(pkg, kind, f))
 		}
 		e.p("}")
@@ -310,20 +509,7 @@ func (e *emitter) attrsFunc(obj *ObjectType, kind string) string {
 }
 
 func (e *emitter) attribute(pkg, kind string, f *Field) string {
-	var props []string
-	switch {
-	case f.Param != nil && f.Param.In == "path":
-		props = append(props, "Required: true")
-	case f.Param != nil && f.Param.Required && !f.FromResponse:
-		props = append(props, "Required: true")
-	case f.Param != nil:
-		props = append(props, "Optional: true")
-		if f.FromResponse {
-			props = append(props, "Computed: true")
-		}
-	default:
-		props = append(props, "Computed: true")
-	}
+	props := []string{"Computed: true"}
 	if f.Desc != "" {
 		props = append(props, "Description: "+strconv.Quote(f.Desc))
 	}
@@ -365,36 +551,16 @@ func (e *emitter) attribute(pkg, kind string, f *Field) string {
 	return pkg + "." + typ + "{\n" + strings.Join(props, ",\n") + ",\n}"
 }
 
-// ---------------------------------------------------------------------------
-// Conversion helpers
-
-func (e *emitter) decode() {
-	root := e.root()
-	e.p("// Decode%sAPI decodes the body of a %s response.", root.Name, e.endpoint())
-	e.p("func Decode%sAPI(body []byte) (*%sAPI, error) {", root.Name, root.Name)
-	e.p("var out %sAPI", root.Name)
-	e.p("if err := json.Unmarshal(body, &out); err != nil {")
-	e.p("return nil, fmt.Errorf(%q, err)", "decoding "+e.endpoint()+" response: %w")
-	e.p("}")
-	e.p("return &out, nil")
-	e.p("}")
-	e.p("")
-}
-
 func (e *emitter) fromAPI() {
 	root := e.root()
-	e.p("// FromAPI sets the model from a %s response. Attributes that only", e.endpoint())
-	e.p("// carry request parameters are left untouched.")
+	e.p("// FromAPI sets the attributes of the model from a %s response.", e.endpoint())
 	e.p("func (m *%sModel) FromAPI(ctx context.Context, in *%sAPI) diag.Diagnostics {", root.Name, root.Name)
 	e.p("var diags diag.Diagnostics")
 	e.p("if in == nil {")
 	e.p("diags.AddError(%q, %q)", "Empty API response", e.endpoint()+" returned no data.")
 	e.p("return diags")
 	e.p("}")
-	for _, f := range root.Fields {
-		if !f.FromResponse {
-			continue
-		}
+	for _, f := range e.exposed(root) {
 		if e.ep.Wrapped {
 			e.convert("m."+f.GoName, "(*in)", f.Node, false, 0)
 		} else {
@@ -498,67 +664,5 @@ func (e *emitter) convert(dst, src string, n *Node, ptr bool, depth int) {
 		e.p("diags.Append(d%d...)", depth)
 		e.p("%s = v%d", dst, depth)
 		e.p("}")
-	}
-}
-
-// requestHelpers writes APIPath and APIQuery for operations with parameters.
-func (e *emitter) requestHelpers() {
-	var path, query []*Param
-	for _, p := range e.ep.Params {
-		if p.In == "path" {
-			path = append(path, p)
-		} else {
-			query = append(query, p)
-		}
-	}
-	root := e.root()
-	if len(path) > 0 {
-		e.use("net/url")
-		e.use("strings")
-		e.p("// APIPath returns the request path of %s built from the model.", e.endpoint())
-		e.p("func (m *%sModel) APIPath() (string, error) {", root.Name)
-		e.p("p := %q", e.ep.Path)
-		for _, p := range path {
-			field := "m." + p.Field.GoName
-			e.p("if %s.IsNull() || %s.IsUnknown() {", field, field)
-			e.use("errors")
-			e.p("return \"\", errors.New(%q)", fmt.Sprintf("attribute %q is required to build the request path", p.Field.TFName))
-			e.p("}")
-			e.p("p = strings.ReplaceAll(p, %q, url.PathEscape(%s))", "{"+p.Name+"}", e.valueString(field, p.Field.Node))
-		}
-		e.p("return p, nil")
-		e.p("}")
-		e.p("")
-	}
-	if len(query) > 0 {
-		e.use("net/url")
-		e.p("// APIQuery returns the query parameters of %s set in the model.", e.endpoint())
-		e.p("func (m *%sModel) APIQuery() url.Values {", root.Name)
-		e.p("q := url.Values{}")
-		for _, p := range query {
-			field := "m." + p.Field.GoName
-			e.p("if !%s.IsNull() && !%s.IsUnknown() {", field, field)
-			e.p("q.Set(%q, %s)", p.Name, e.valueString(field, p.Field.Node))
-			e.p("}")
-		}
-		e.p("return q")
-		e.p("}")
-		e.p("")
-	}
-}
-
-func (e *emitter) valueString(field string, n *Node) string {
-	switch n.Kind {
-	case KInt:
-		e.use("strconv")
-		return "strconv.FormatInt(" + field + ".ValueInt64(), 10)"
-	case KFloat:
-		e.use("strconv")
-		return "strconv.FormatFloat(" + field + ".ValueFloat64(), 'f', -1, 64)"
-	case KBool:
-		e.use("strconv")
-		return "strconv.FormatBool(" + field + ".ValueBool())"
-	default:
-		return field + ".ValueString()"
 	}
 }

@@ -26,11 +26,65 @@ type ProjectsProjectSummaryAPI struct {
 	Owner *string `json:"owner"`
 }
 
-// ProjectsModel is the Terraform model of the GET /projects response.
+// GetID returns ID, or "" when it is absent.
+func (x *ProjectsProjectSummaryAPI) GetID() string {
+	if x == nil || x.ID == nil {
+		return ""
+	}
+	return *x.ID
+}
+
+// GetName returns Name, or "" when it is absent.
+func (x *ProjectsProjectSummaryAPI) GetName() string {
+	if x == nil || x.Name == nil {
+		return ""
+	}
+	return *x.Name
+}
+
+// GetOwner returns Owner, or "" when it is absent.
+func (x *ProjectsProjectSummaryAPI) GetOwner() string {
+	if x == nil || x.Owner == nil {
+		return ""
+	}
+	return *x.Owner
+}
+
+// DecodeProjectsAPI decodes the body of a GET /projects response.
+func DecodeProjectsAPI(body []byte) (*ProjectsAPI, error) {
+	var out ProjectsAPI
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decoding GET /projects response: %w", err)
+	}
+	return &out, nil
+}
+
+// ProjectsPath returns the request path of GET /projects, with escaped parameters.
+func ProjectsPath() string {
+	return "/projects"
+}
+
+// ProjectsQuery holds the query parameters of GET /projects. Nil fields are not sent.
+type ProjectsQuery struct {
+	Limit *int64
+	Owner string
+}
+
+// Values encodes the parameters for the request URL.
+func (q ProjectsQuery) Values() url.Values {
+	v := url.Values{}
+	if q.Limit != nil {
+		v.Set("limit", strconv.FormatInt(*q.Limit, 10))
+	}
+	v.Set("owner", q.Owner)
+	return v
+}
+
+// ProjectsModel holds the Terraform attributes read from the GET /projects response.
+// Embed it by value in a resource or data source model; FromAPI is then
+// promoted to that model.
 type ProjectsModel struct {
-	Limit types.Int64  `tfsdk:"limit"`
-	Owner types.String `tfsdk:"owner"`
-	Items types.List   `tfsdk:"items"`
+	Items types.List `tfsdk:"items"`
 }
 
 // ProjectsProjectSummaryModel is the Terraform model of ProjectsProjectSummaryAPI.
@@ -49,23 +103,10 @@ func (ProjectsProjectSummaryModel) AttrTypes() map[string]attr.Type {
 	}
 }
 
-// ProjectsDataSourceSchema returns the data source schema of the GET /projects response.
-func ProjectsDataSourceSchema() dsschema.Schema {
-	return dsschema.Schema{
-		Description: "List projects.",
-		Attributes:  ProjectsDataSourceAttributes(),
-	}
-}
-
-// ProjectsDataSourceAttributes returns the attributes of ProjectsModel, to embed them in another schema.
+// ProjectsDataSourceAttributes returns the data source attributes of ProjectsModel, all computed.
+// Merge them into the schema of the data source that embeds ProjectsModel.
 func ProjectsDataSourceAttributes() map[string]dsschema.Attribute {
 	return map[string]dsschema.Attribute{
-		"limit": dsschema.Int64Attribute{
-			Optional: true,
-		},
-		"owner": dsschema.StringAttribute{
-			Required: true,
-		},
 		"items": dsschema.ListNestedAttribute{
 			Computed:     true,
 			NestedObject: dsschema.NestedAttributeObject{Attributes: projectsProjectSummaryDataSourceAttributes()},
@@ -87,23 +128,10 @@ func projectsProjectSummaryDataSourceAttributes() map[string]dsschema.Attribute 
 	}
 }
 
-// ProjectsResourceSchema returns the resource schema of the GET /projects response.
-func ProjectsResourceSchema() rsschema.Schema {
-	return rsschema.Schema{
-		Description: "List projects.",
-		Attributes:  ProjectsResourceAttributes(),
-	}
-}
-
-// ProjectsResourceAttributes returns the attributes of ProjectsModel, to embed them in another schema.
+// ProjectsResourceAttributes returns the resource attributes of ProjectsModel, all computed.
+// Merge them into the schema of the resource that embeds ProjectsModel.
 func ProjectsResourceAttributes() map[string]rsschema.Attribute {
 	return map[string]rsschema.Attribute{
-		"limit": rsschema.Int64Attribute{
-			Optional: true,
-		},
-		"owner": rsschema.StringAttribute{
-			Required: true,
-		},
 		"items": rsschema.ListNestedAttribute{
 			Computed:     true,
 			NestedObject: rsschema.NestedAttributeObject{Attributes: projectsProjectSummaryResourceAttributes()},
@@ -125,17 +153,7 @@ func projectsProjectSummaryResourceAttributes() map[string]rsschema.Attribute {
 	}
 }
 
-// DecodeProjectsAPI decodes the body of a GET /projects response.
-func DecodeProjectsAPI(body []byte) (*ProjectsAPI, error) {
-	var out ProjectsAPI
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fmt.Errorf("decoding GET /projects response: %w", err)
-	}
-	return &out, nil
-}
-
-// FromAPI sets the model from a GET /projects response. Attributes that only
-// carry request parameters are left untouched.
+// FromAPI sets the attributes of the model from a GET /projects response.
 func (m *ProjectsModel) FromAPI(ctx context.Context, in *ProjectsAPI) diag.Diagnostics {
 	var diags diag.Diagnostics
 	if in == nil {
@@ -180,16 +198,4 @@ func projectsProjectSummaryFromAPI(ctx context.Context, in *ProjectsProjectSumma
 	})
 	diags.Append(d...)
 	return v, diags
-}
-
-// APIQuery returns the query parameters of GET /projects set in the model.
-func (m *ProjectsModel) APIQuery() url.Values {
-	q := url.Values{}
-	if !m.Limit.IsNull() && !m.Limit.IsUnknown() {
-		q.Set("limit", strconv.FormatInt(m.Limit.ValueInt64(), 10))
-	}
-	if !m.Owner.IsNull() && !m.Owner.IsUnknown() {
-		q.Set("owner", m.Owner.ValueString())
-	}
-	return q
 }

@@ -41,25 +41,32 @@ type ObjectType struct {
 	Fields []*Field
 }
 
-// Field is an object property, or a request parameter on the root model.
+// Field is an object property of the response.
 type Field struct {
-	JSONName     string
-	GoName       string
-	TFName       string
-	Node         *Node
-	Desc         string
-	Sensitive    bool
-	Deprecated   bool
-	FromResponse bool   // set from the API response
-	Param        *Param // bound to a request parameter
+	JSONName   string
+	GoName     string
+	TFName     string
+	Node       *Node
+	Desc       string
+	Sensitive  bool
+	Deprecated bool
+	// Exposed tells whether the field is a Terraform attribute. Every field
+	// is decoded in the API structs; only exposed root fields (see
+	// Options.Attrs) and the objects they reach get a model and a schema.
+	Exposed bool
 }
 
-// Param is a path or query parameter of the operation.
+// Param is a path or query parameter of the operation. Parameters are not
+// Terraform attributes: they feed the generated request helpers.
 type Param struct {
-	Name     string
-	In       string // "path" or "query"
-	Required bool
-	Field    *Field
+	Name       string
+	In         string // "path" or "query"
+	Required   bool
+	Node       *Node // scalar
+	GoName     string
+	ArgName    string // Go argument name in the path function
+	Desc       string
+	Deprecated bool
 }
 
 // Endpoint is the generator input for one operation.
@@ -84,6 +91,9 @@ type Options struct {
 	// ItemsAttr names the attribute holding a response that is not an object
 	// (an array, for instance). Default "items".
 	ItemsAttr string
+	// Attrs lists the root response properties exposed as Terraform
+	// attributes, by JSON or Terraform name. Empty means all of them.
+	Attrs []string
 }
 
 // Build reads the operation and its response schema.
@@ -137,12 +147,12 @@ func Build(doc *spec.Document, o Options) (*Endpoint, error) {
 		out.Wrapped = true
 		out.Root = &ObjectType{Name: b.uniqueType(base)}
 		out.Root.Fields = []*Field{{
-			JSONName:     "",
-			GoName:       GoName(o.ItemsAttr),
-			TFName:       TFName(o.ItemsAttr),
-			Node:         rootNode,
-			Desc:         describe(schema, rootNode),
-			FromResponse: true,
+			JSONName: "",
+			GoName:   GoName(o.ItemsAttr),
+			TFName:   TFName(o.ItemsAttr),
+			Node:     rootNode,
+			Desc:     describe(schema, rootNode),
+			Exposed:  true,
 		}}
 		b.objects = append(b.objects, out.Root)
 	}
@@ -152,6 +162,9 @@ func Build(doc *spec.Document, o Options) (*Endpoint, error) {
 		return nil, err
 	}
 	b.checkFieldNames(out.Root, true)
+	if err := selectAttrs(out, o.Attrs); err != nil {
+		return nil, err
+	}
 
 	// Root first, then nested objects in discovery order.
 	out.Objects = append(out.Objects, out.Root)
@@ -449,14 +462,14 @@ func (b *builder) object(s *spec.Schema, hint, where, ref string) (*ObjectType, 
 			return nil, fmt.Errorf("%s: %w", at, err)
 		}
 		f := &Field{
-			JSONName:     name,
-			GoName:       GoName(name),
-			TFName:       TFName(name),
-			Node:         n,
-			Desc:         describe(withFallback(ps, target), n),
-			Sensitive:    isSensitive(ps) || isSensitive(target),
-			Deprecated:   (ps != nil && ps.Deprecated) || (target != nil && target.Deprecated),
-			FromResponse: true,
+			JSONName:   name,
+			GoName:     GoName(name),
+			TFName:     TFName(name),
+			Node:       n,
+			Desc:       describe(withFallback(ps, target), n),
+			Sensitive:  isSensitive(ps) || isSensitive(target),
+			Deprecated: (ps != nil && ps.Deprecated) || (target != nil && target.Deprecated),
+			Exposed:    true,
 		}
 		if strings.HasSuffix(f.TFName, "_value") && reservedTF[strings.TrimSuffix(f.TFName, "_value")] {
 			b.warn(at, "%q is a Terraform meta-argument, attribute renamed %q", strings.TrimSuffix(f.TFName, "_value"), f.TFName)
@@ -476,7 +489,7 @@ func (b *builder) object(s *spec.Schema, hint, where, ref string) (*ObjectType, 
 func (b *builder) checkFieldNames(obj *ObjectType, root bool) {
 	reservedGo := map[string]bool{"AttrTypes": true}
 	if root {
-		reservedGo = map[string]bool{"FromAPI": true, "APIPath": true, "APIQuery": true}
+		reservedGo = map[string]bool{"FromAPI": true}
 	}
 	goNames, tfNames := map[string]bool{}, map[string]bool{}
 	for _, f := range obj.Fields {
@@ -563,7 +576,57 @@ func (b *builder) mergeAllOf(s *spec.Schema, depth int) (*spec.Schema, bool, err
 	return merged, true, nil
 }
 
-// params adds path and query parameters to the root model.
+// selectAttrs restricts the Terraform attributes of the root model.
+func selectAttrs(out *Endpoint, attrs []string) error {
+	want := map[string]bool{}
+	for _, a := range attrs {
+		if a = strings.TrimSpace(a); a != "" {
+			want[a] = true
+		}
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	if out.Wrapped {
+		return fmt.Errorf("-attrs needs a response that is an object")
+	}
+	matched := map[string]bool{}
+	var available []string
+	for _, f := range out.Root.Fields {
+		available = append(available, f.JSONName)
+		f.Exposed = false
+		for _, name := range []string{f.JSONName, f.TFName} {
+			if want[name] {
+				f.Exposed = true
+				matched[name] = true
+			}
+		}
+	}
+	var unknown []string
+	for a := range want {
+		if !matched[a] {
+			unknown = append(unknown, a)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("unknown attributes %s; response properties: %s",
+			strings.Join(unknown, ", "), strings.Join(available, ", "))
+	}
+	return nil
+}
+
+var goKeywords = map[string]bool{
+	"break": true, "case": true, "chan": true, "const": true, "continue": true, "default": true,
+	"defer": true, "else": true, "fallthrough": true, "for": true, "func": true, "go": true,
+	"goto": true, "if": true, "import": true, "interface": true, "map": true, "package": true,
+	"range": true, "return": true, "select": true, "struct": true, "switch": true, "type": true,
+	"var": true,
+	// packages used by the generated helpers
+	"url": true, "strconv": true, "strings": true, "fmt": true, "json": true,
+}
+
+// params collects the path and query parameters of the operation.
 func (b *builder) params(out *Endpoint, ep spec.Endpoint) error {
 	type key struct{ name, in string }
 	var order []key
@@ -582,19 +645,44 @@ func (b *builder) params(out *Endpoint, ep spec.Endpoint) error {
 		}
 	}
 
-	root := out.Root
-	byTF := map[string]*Field{}
-	if !out.Wrapped {
-		for _, f := range root.Fields {
-			byTF[f.TFName] = f
-		}
+	placeholders := pathPlaceholders(ep.Path)
+	inPath := map[string]bool{}
+	for _, name := range placeholders {
+		inPath[name] = true
 	}
-	var extra []*Field
+	goNames := map[string]map[string]bool{"path": {}, "query": {}}
+	argNames := map[string]bool{}
+	add := func(p *Param) {
+		name := p.GoName
+		for i := 2; goNames[p.In][name]; i++ {
+			name = fmt.Sprintf("%s%d", p.GoName, i)
+		}
+		p.GoName = name
+		goNames[p.In][name] = true
+		if p.In == "path" {
+			arg := lowerFirst(name)
+			if goKeywords[arg] {
+				arg += "Param"
+			}
+			for i := 2; argNames[arg]; i++ {
+				arg = fmt.Sprintf("%s%d", lowerFirst(name), i)
+			}
+			argNames[arg] = true
+			p.ArgName = arg
+		}
+		out.Params = append(out.Params, p)
+	}
+
+	declared := map[string]bool{}
 	for _, k := range order {
 		p := byKey[k]
 		where := fmt.Sprintf("parameter %s (%s)", p.Name, p.In)
 		if p.In != "path" && p.In != "query" {
-			b.warn(where, "only path and query parameters are mapped, skipped")
+			b.warn(where, "only path and query parameters are used, skipped")
+			continue
+		}
+		if p.In == "path" && !inPath[p.Name] {
+			b.warn(where, "not in the path template, skipped")
 			continue
 		}
 		n, err := b.node(p.Schema, b.base+GoName(p.Name)+"Param", where)
@@ -608,29 +696,43 @@ func (b *builder) params(out *Endpoint, ep spec.Endpoint) error {
 			b.warn(where, "non-scalar query parameter, skipped")
 			continue
 		}
-		param := &Param{Name: p.Name, In: p.In, Required: p.Required || p.In == "path"}
-		if f, ok := byTF[TFName(p.Name)]; ok && f.FromResponse && f.Node.Kind <= KBool {
-			f.Param = param
-			param.Field = f
-			if f.Desc == "" {
-				f.Desc = strings.TrimSpace(p.Description)
-			}
-		} else {
-			f := &Field{
-				GoName:     GoName(p.Name),
-				TFName:     TFName(p.Name),
-				Node:       n,
-				Desc:       strings.TrimSpace(p.Description),
-				Deprecated: p.Deprecated,
-				Param:      param,
-			}
-			param.Field = f
-			extra = append(extra, f)
+		if p.In == "path" {
+			declared[p.Name] = true
 		}
-		out.Params = append(out.Params, param)
+		add(&Param{
+			Name:       p.Name,
+			In:         p.In,
+			Required:   p.Required || p.In == "path",
+			Node:       n,
+			GoName:     GoName(p.Name),
+			Desc:       strings.TrimSpace(p.Description),
+			Deprecated: p.Deprecated,
+		})
 	}
-	root.Fields = append(extra, root.Fields...)
+	for _, name := range placeholders {
+		if !declared[name] {
+			b.warn("parameter "+name+" (path)", "not declared, assumed to be a string")
+			add(&Param{Name: name, In: "path", Required: true, Node: &Node{Kind: KString}, GoName: GoName(name)})
+		}
+	}
 	return nil
+}
+
+// pathPlaceholders returns the {name} placeholders of a path template.
+func pathPlaceholders(path string) []string {
+	var out []string
+	for {
+		i := strings.Index(path, "{")
+		if i < 0 {
+			return out
+		}
+		j := strings.Index(path[i:], "}")
+		if j < 0 {
+			return out
+		}
+		out = append(out, path[i+1:i+j])
+		path = path[i+j+1:]
+	}
 }
 
 func isNullSchema(s *spec.Schema) bool {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	dsschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	rsschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
@@ -42,7 +44,7 @@ func TestProjectFromAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := ProjectModel{ID: types.StringValue("p-1"), Expand: types.BoolValue(true)}
+	var m ProjectModel
 	if diags := m.FromAPI(ctx, in); diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -67,7 +69,6 @@ func TestProjectFromAPI(t *testing.T) {
 		{"free-form JSON", m.Metadata.Equal(types.StringValue(`{"env": "prod", "n": 1}`))},
 		{"oneOf as JSON", m.Value.Equal(types.StringValue("42"))},
 		{"absent JSON", m.Parent.IsNull()},
-		{"request-only attribute untouched", m.Expand.Equal(types.BoolValue(true))},
 	}
 	for _, c := range checks {
 		if !c.got {
@@ -106,16 +107,15 @@ func TestProjectModelMatchesSchemas(t *testing.T) {
 		t.Fatal(err)
 	}
 	var m ProjectModel
-	m.Expand = types.BoolNull()
 	if d := m.FromAPI(ctx, in); d.HasError() {
 		t.Fatal(d)
 	}
 
-	dsSchema := ProjectDataSourceSchema()
+	dsSchema := dsschema.Schema{Attributes: ProjectDataSourceAttributes()}
 	if d := dsSchema.ValidateImplementation(ctx); d.HasError() {
 		t.Fatalf("data source schema: %v", d)
 	}
-	rsSchema := ProjectResourceSchema()
+	rsSchema := rsschema.Schema{Attributes: ProjectResourceAttributes()}
 	if d := rsSchema.ValidateImplementation(ctx); d.HasError() {
 		t.Fatalf("resource schema: %v", d)
 	}
@@ -138,23 +138,40 @@ func TestProjectModelMatchesSchemas(t *testing.T) {
 	}
 }
 
-func TestProjectRequestHelpers(t *testing.T) {
-	m := ProjectModel{ID: types.StringValue("a b/c"), Expand: types.BoolValue(true)}
-	p, err := m.APIPath()
+func TestRequestHelpers(t *testing.T) {
+	if p := ProjectPath("a b/c"); p != "/projects/a%20b%2Fc" {
+		t.Fatalf("path = %q", p)
+	}
+	expand := true
+	if q := (ProjectQuery{Expand: &expand}).Values().Encode(); q != "expand=true" {
+		t.Fatalf("query = %q", q)
+	}
+	if q := (ProjectQuery{}).Values(); len(q) != 0 {
+		t.Fatalf("unset parameters sent: %v", q)
+	}
+	if p := ProjectsPath(); p != "/projects" {
+		t.Fatalf("path = %q", p)
+	}
+	limit := int64(10)
+	if q := (ProjectsQuery{Limit: &limit, Owner: "u-1"}).Values().Encode(); q != "limit=10&owner=u-1" {
+		t.Fatalf("query = %q", q)
+	}
+}
+
+func TestGettersAndEnums(t *testing.T) {
+	in, err := DecodeProjectAPI([]byte(projectBody))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p != "/projects/a%20b%2Fc" {
-		t.Fatalf("path = %q", p)
+	if in.GetStatus() != ProjectStatusActive || in.GetReplicas() != 3 || in.GetDescription() != "" {
+		t.Fatalf("getters: %q %d %q", in.GetStatus(), in.GetReplicas(), in.GetDescription())
 	}
-	if q := m.APIQuery().Encode(); q != "expand=true" {
-		t.Fatalf("query = %q", q)
+	if in.GetOwner().GetEmail() != "" || in.GetSettings().GetNotifications().GetEmail() != true {
+		t.Fatal("nested getters")
 	}
-	if _, err := (&ProjectModel{ID: types.StringUnknown()}).APIPath(); err == nil {
-		t.Fatal("unknown id accepted")
-	}
-	if q := (&ProjectModel{}).APIQuery(); len(q) != 0 {
-		t.Fatalf("null parameters in query: %v", q)
+	var none *ProjectAPI
+	if none.GetStatus() != "" || none.GetTags() != nil {
+		t.Fatal("getters on a nil response")
 	}
 }
 
@@ -164,7 +181,7 @@ func TestProjectsArrayResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := ProjectsModel{Owner: types.StringValue("u-1"), Limit: types.Int64Value(10)}
+	var m ProjectsModel
 	if d := m.FromAPI(ctx, in); d.HasError() {
 		t.Fatal(d)
 	}
@@ -175,14 +192,8 @@ func TestProjectsArrayResponse(t *testing.T) {
 	if len(items) != 2 || items[1].Owner.ValueString() != "u-1" || !items[0].Owner.IsNull() {
 		t.Fatalf("items: %+v", items)
 	}
-	if !m.Owner.Equal(types.StringValue("u-1")) {
-		t.Fatal("query parameter overwritten by the response")
-	}
-	if q := m.APIQuery().Encode(); q != "limit=10&owner=u-1" {
-		t.Fatalf("query = %q", q)
-	}
 
-	s := ProjectsDataSourceSchema()
+	s := dsschema.Schema{Attributes: ProjectsDataSourceAttributes()}
 	state := tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
 	if d := state.Set(ctx, &m); d.HasError() {
 		t.Fatal(d)

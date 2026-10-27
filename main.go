@@ -31,10 +31,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, `Usage: tfmodelgen -spec FILE -path PATH [flags]
 
 Generates, from the JSON response of an OpenAPI 3.x operation:
-  - Go structs decoding the API response,
-  - Terraform Plugin Framework models and schemas,
-  - helpers converting a response into the model (FromAPI) and building the
-    request path and query (APIPath, APIQuery).
+  - Go structs decoding the API response, with nil-safe getters and enum
+    constants,
+  - request helpers building the path and the query (<Name>Path, <Name>Query),
+  - a Terraform Plugin Framework model, embeddable in a resource model, with
+    its schema attributes and a FromAPI conversion. -attrs restricts it to
+    the properties the provider exposes, such as status.
 
 Without -path, lists the operations of -method.
 
@@ -51,7 +53,8 @@ Flags:
 		pkg       = fs.String("package", "provider", "Go package of the generated file")
 		out       = fs.String("out", ".", "output directory, or - for standard output")
 		file      = fs.String("file", "", "output file name (default: <name>_model_gen.go)")
-		schema    = fs.String("schema", "datasource", "schemas to generate: datasource, resource, both or none")
+		schema    = fs.String("schema", "resource", "schema attributes to generate: resource, datasource, both or none")
+		attrs     = fs.String("attrs", "", "comma-separated root response properties exposed as Terraform attributes, e.g. status (default: all)")
 		itemsAttr = fs.String("items-attr", "items", "attribute holding a response that is not an object, e.g. an array")
 	)
 	if err := fs.Parse(args); err != nil {
@@ -97,6 +100,7 @@ Flags:
 		Status:    *status,
 		Name:      *name,
 		ItemsAttr: *itemsAttr,
+		Attrs:     strings.Split(*attrs, ","),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "tfmodelgen: %v\n", err)

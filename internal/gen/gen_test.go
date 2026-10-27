@@ -19,17 +19,22 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cases := []struct{ path, name, file string }{
-		{"/projects/{id}", "Project", "project_model_gen.go"},
-		{"/projects", "Projects", "projects_model_gen.go"},
+	cases := []struct {
+		path, name, file string
+		attrs            []string
+		schema           SchemaKind
+	}{
+		{"/projects/{id}", "Project", "project_model_gen.go", nil, SchemaBoth},
+		{"/projects", "Projects", "projects_model_gen.go", nil, SchemaBoth},
+		{"/projects/{id}", "ProjectStatus", "project_status_model_gen.go", []string{"status", "updatedAt"}, SchemaResource},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ep, err := Build(doc, Options{Path: c.path, Name: c.name})
+			ep, err := Build(doc, Options{Path: c.path, Name: c.name, Attrs: c.attrs})
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := Emit(ep, EmitOptions{Package: "e2e", SpecName: "openapi.json", Schema: SchemaBoth})
+			got, err := Emit(ep, EmitOptions{Package: "e2e", SpecName: "openapi.json", Schema: c.schema})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -119,8 +124,8 @@ func TestOpenAPI30Nullable(t *testing.T) {
 	if f := field(t, ep.Root, "size"); f.Node.Kind != KInt || !strings.Contains(f.Desc, "`2`") {
 		t.Errorf("enum: kind %v, desc %q", f.Node.Kind, f.Desc)
 	}
-	if f := field(t, ep.Root, "thing_id"); f.Param == nil || f.FromResponse || f.Node.Kind != KInt {
-		t.Errorf("path parameter not added: %+v", f)
+	if len(ep.Params) != 1 || ep.Params[0].ArgName != "thingID" || ep.Params[0].Node.Kind != KInt {
+		t.Errorf("path parameter: %+v", ep.Params)
 	}
 }
 
@@ -176,5 +181,45 @@ func TestNaming(t *testing.T) {
 	}
 	if got := DefaultName("", "listProjectMembers"); got != "ProjectMembers" {
 		t.Errorf("DefaultName from operationId = %q", got)
+	}
+}
+
+func TestAttrs(t *testing.T) {
+	doc, err := spec.Load("../../testdata/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep, err := Build(doc, Options{Path: "/projects/{id}", Attrs: []string{"status", "updated_at"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exposed []string
+	for _, f := range ep.Root.Fields {
+		if f.Exposed {
+			exposed = append(exposed, f.TFName)
+		}
+	}
+	if strings.Join(exposed, ",") != "updated_at,status" {
+		t.Fatalf("exposed = %v", exposed)
+	}
+	src, err := Emit(ep, EmitOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unwanted := range []string{"ProjectUserModel", "dsschema", `tfsdk:"name"`} {
+		if strings.Contains(string(src), unwanted) {
+			t.Errorf("unexpected %q in output", unwanted)
+		}
+	}
+	if !strings.Contains(string(src), "ProjectUserAPI struct") {
+		t.Error("API structs must stay complete")
+	}
+
+	if _, err := Build(doc, Options{Path: "/projects/{id}", Attrs: []string{"state"}}); err == nil ||
+		!strings.Contains(err.Error(), "response properties:") {
+		t.Errorf("unknown attribute: %v", err)
+	}
+	if _, err := Build(doc, Options{Path: "/projects", Attrs: []string{"id"}}); err == nil {
+		t.Error("-attrs accepted on an array response")
 	}
 }
