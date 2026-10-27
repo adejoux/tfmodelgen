@@ -189,7 +189,7 @@ api, err := DecodeProjectsAPI(body) // []*ProjectsProjectSummaryAPI
 
 var items []ProjectsProjectSummaryModel
 for _, obj := range *api {
-	if obj.GetStatus() == "deleted" { // any filter
+	if obj.GetOwner() == "" { // any filter, here: skip unowned projects
 		continue
 	}
 	var item ProjectsProjectSummaryModel
