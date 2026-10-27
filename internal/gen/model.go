@@ -56,8 +56,8 @@ type Field struct {
 	Exposed bool
 }
 
-// Param is a path or query parameter of the operation. Parameters are not
-// Terraform attributes: they feed the generated request helpers.
+// Param is a path or query parameter of the operation. Parameters feed the
+// request helpers and are the arguments of the data source model.
 type Param struct {
 	Name       string
 	In         string // "path" or "query"
@@ -67,6 +67,13 @@ type Param struct {
 	ArgName    string // Go argument name in the path function
 	Desc       string
 	Deprecated bool
+
+	// Data source model: Field is the exposed response attribute with the
+	// same Terraform name, which then also carries the argument; otherwise
+	// the parameter gets its own attribute, TFName and ModelGoName.
+	Field       *Field
+	TFName      string
+	ModelGoName string
 }
 
 // Endpoint is the generator input for one operation.
@@ -165,6 +172,7 @@ func Build(doc *spec.Document, o Options) (*Endpoint, error) {
 	if err := selectAttrs(out, o.Attrs); err != nil {
 		return nil, err
 	}
+	b.linkParams(out)
 
 	// Root first, then nested objects in discovery order.
 	out.Objects = append(out.Objects, out.Root)
@@ -614,6 +622,52 @@ func selectAttrs(out *Endpoint, attrs []string) error {
 			strings.Join(unknown, ", "), strings.Join(available, ", "))
 	}
 	return nil
+}
+
+// linkParams binds each parameter to the response attribute with the same
+// Terraform name (GET /projects/{id} and a response "id"), or gives it its
+// own attribute in the data source model.
+func (b *builder) linkParams(out *Endpoint) {
+	byTF := map[string]*Field{}
+	goNames := map[string]bool{"FromAPI": true, "APIPath": true, "APIQuery": true, out.Root.Name + "Model": true}
+	for _, f := range out.Root.Fields {
+		if f.Exposed { // only exposed fields are in the embedded model
+			goNames[f.GoName] = true
+			byTF[f.TFName] = f
+		}
+	}
+	tfNames := map[string]bool{}
+	for _, p := range out.Params {
+		tf := TFName(p.Name)
+		if f, ok := byTF[tf]; ok && !out.Wrapped && f.Node.Kind <= KBool && !tfNames[tf] {
+			p.Field = f
+			p.TFName = tf
+			tfNames[tf] = true
+			continue
+		}
+		name := tf
+		if byTF[name] != nil || tfNames[name] {
+			name = tf + "_param"
+		}
+		for i := 2; byTF[name] != nil || tfNames[name]; i++ {
+			name = fmt.Sprintf("%s_param%d", tf, i)
+		}
+		if name != tf {
+			b.warn("parameter "+p.Name+" ("+p.In+")", "clashes with a response attribute, data source argument named %q", name)
+		}
+		tfNames[name] = true
+		p.TFName = name
+
+		goName := p.GoName
+		if goNames[goName] {
+			goName = p.GoName + "Param"
+		}
+		for i := 2; goNames[goName]; i++ {
+			goName = fmt.Sprintf("%sParam%d", p.GoName, i)
+		}
+		goNames[goName] = true
+		p.ModelGoName = goName
+	}
 }
 
 var goKeywords = map[string]bool{

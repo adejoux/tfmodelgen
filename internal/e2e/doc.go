@@ -6,4 +6,4 @@ package e2e
 
 //go:generate go run ../.. -spec ../../testdata/openapi.json -path /projects/{id} -name Project -package e2e -schema both
 //go:generate go run ../.. -spec ../../testdata/openapi.json -path /projects -name Projects -package e2e -schema both
-//go:generate go run ../.. -spec ../../testdata/openapi.json -path /projects/{id} -name ProjectStatus -attrs status,updatedAt -package e2e
+//go:generate go run ../.. -spec ../../testdata/openapi.json -path /projects/{id} -name ProjectStatus -attrs status,updatedAt -schema resource -package e2e

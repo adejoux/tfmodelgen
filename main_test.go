@@ -28,8 +28,8 @@ func TestRunGeneratesFile(t *testing.T) {
 	if !strings.Contains(stderr.String(), "warning:") {
 		t.Fatal("warnings not reported")
 	}
-	if !bytes.Contains(b, []byte("ProjectResourceAttributes()")) || bytes.Contains(b, []byte("dsschema")) {
-		t.Fatal("resource attributes expected by default, and only them")
+	if !bytes.Contains(b, []byte("ProjectDataSourceSchema()")) || bytes.Contains(b, []byte("rsschema")) {
+		t.Fatal("data source schema expected by default, and only it")
 	}
 }
 

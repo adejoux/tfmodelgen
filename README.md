@@ -2,7 +2,10 @@
 
 `tfmodelgen` reads an OpenAPI 3.0 or 3.1 document (JSON) and generates, for the response of one operation, a Go file for a Terraform provider built on the [Plugin Framework](https://developer.hashicorp.com/terraform/plugin/framework).
 
-The typical use is an operation the provider calls internally without exposing it as a data source: after creating a resource, poll `GET /projects/{id}` until the project is ready, then store its `status` in the resource state.
+A GET operation typically serves twice:
+
+- a **data source** reads it: its arguments are the request parameters (`id`, filters), its computed attributes come from the response;
+- a **resource** calls it internally, for instance to poll `GET /projects/{id}` after a create until the project is ready, then store its `status`.
 
 The generated file has two sides:
 
@@ -11,9 +14,9 @@ The generated file has two sides:
   - nil-safe getters (`api.GetStatus()`, `api.GetOwner().GetEmail()`) and constants for string enums (`ProjectStatusActive`);
   - `DecodeProjectAPI(body)`, `ProjectPath(id)` and, with query parameters, `ProjectQuery{...}.Values()`.
 - **Terraform side**, restricted with `-attrs` to the properties the provider exposes:
-  - `ProjectModel`, embeddable by value in a resource or data source model;
-  - `ProjectResourceAttributes()` (and/or `ProjectDataSourceAttributes()`), computed attributes to merge into the schema;
-  - `(*ProjectModel).FromAPI(ctx, api)`, which sets the model from a decoded response.
+  - `ProjectModel` with the response attributes and `FromAPI(ctx, api)`;
+  - data sources (`-schema datasource`, the default): `ProjectDataSourceModel`, which embeds `ProjectModel` and adds the request parameters as arguments, `ProjectDataSourceSchema()`, and `APIPath()` / `APIQuery()` built from the configuration;
+  - resources (`-schema resource`): `ProjectResourceAttributes()`, the computed attributes of `ProjectModel` to merge into the schema of a resource that embeds it.
 
 ## Install
 
@@ -29,18 +32,26 @@ List the GET operations of a document:
 tfmodelgen -spec openapi.json
 ```
 
-Generate the file for one operation, exposing only `status`:
+Generate a data source for one operation:
+
+```sh
+tfmodelgen -spec openapi.json -path '/projects/{id}' -name Project \
+  -package provider -out internal/provider
+# GET /projects/{id} -> internal/provider/project_model_gen.go
+```
+
+Generate the status model of a resource from the same operation:
 
 ```sh
 tfmodelgen -spec openapi.json -path '/projects/{id}' -name ProjectStatus -attrs status \
-  -package provider -out internal/provider
-# GET /projects/{id} -> internal/provider/project_status_model_gen.go
+  -schema resource -package provider -out internal/provider
 ```
 
 Or from the provider sources:
 
 ```go
-//go:generate go run github.com/adejoux/tfmodelgen -spec ../../openapi.json -path /projects/{id} -name ProjectStatus -attrs status -package provider
+//go:generate go run github.com/adejoux/tfmodelgen -spec ../../openapi.json -path /projects/{id} -name Project -package provider
+//go:generate go run github.com/adejoux/tfmodelgen -spec ../../openapi.json -path /projects/{id} -name ProjectStatus -attrs status -schema resource -package provider
 ```
 
 | Flag | Default | Meaning |
@@ -51,13 +62,49 @@ Or from the provider sources:
 | `-status` | `200`, then the first `2xx`, then `default` | Response to use |
 | `-name` | from `operationId` (`getProject` → `Project`) | Go base name of the generated identifiers |
 | `-attrs` | all | Root response properties exposed as Terraform attributes, comma-separated, JSON or Terraform names |
-| `-schema` | `resource` | Schema attributes to generate: `resource`, `datasource`, `both` or `none` |
+| `-schema` | `datasource` | Schemas to generate: `datasource`, `resource`, `both` or `none` |
 | `-package` | `provider` | Go package |
 | `-out` | `.` | Output directory, `-` for standard output |
 | `-file` | `<name>_model_gen.go` | Output file name |
 | `-items-attr` | `items` | Attribute holding a response that is not an object (an array, for instance) |
 
 `-attrs` only restricts the Terraform side: the API structs always decode the whole response, so the provider can read any field in Go. Several operations can be generated into the same package, since every identifier is prefixed with `-name`.
+
+## In a data source
+
+```go
+func (d *projectDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = ProjectDataSourceSchema()
+}
+
+func (d *projectDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var m ProjectDataSourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	path, err := m.APIPath()
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid configuration", err.Error())
+		return
+	}
+	body, err := d.client.Get(ctx, path, m.APIQuery()) // your API client
+	if err == nil {
+		var api *ProjectAPI
+		if api, err = DecodeProjectAPI(body); err == nil {
+			resp.Diagnostics.Append(m.FromAPI(ctx, api)...)
+		}
+	}
+	if err != nil {
+		resp.Diagnostics.AddError("Cannot read the project", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+}
+```
+
+In the data source schema, a path parameter is a required argument and a query parameter an optional one (required when the document says so). A parameter with the same name as a response attribute shares it: `id` is both the argument and the attribute. `FromAPI` on the data source model keeps the configured arguments, as Terraform requires, even when the API normalises or omits them.
 
 ## In a resource
 
@@ -146,7 +193,7 @@ diags := m.Settings.As(ctx, &settings, basetypes.ObjectAsOptions{})
 - Nullability: OpenAPI 3.1 `type: [T, "null"]`, `oneOf`/`anyOf` with a `null` branch, and 3.0 `nullable: true`. Every response attribute is nullable on the Terraform side, since the API may omit it; absent and `null` give a null value, never `""` or `0`.
 - `$ref` (local `#/components/...` only), `allOf` of objects (merged), `oneOf`/`anyOf` with a single non-null alternative.
 - Attribute names are converted to snake case (`createdAt` → `created_at`). Terraform meta-arguments get a suffix (`count` → `count_value`).
-- Path and query parameters are not Terraform attributes: they become the arguments of `<Name>Path` and the fields of `<Name>Query` (pointers when optional). Header and cookie parameters are ignored.
+- Path and query parameters become the arguments of `<Name>Path` and the fields of `<Name>Query` (pointers when optional), and the arguments of the data source model. They are never attributes of `<Name>Model`, so the resource model does not get them. Header and cookie parameters are ignored.
 - `format: password` and `writeOnly` give `Sensitive: true`; `writeOnly` properties are left out of the response. `deprecated` sets a deprecation message. Descriptions, titles and enum values go into the schema descriptions.
 - Dates stay strings (RFC 3339 as returned by the API).
 
@@ -155,7 +202,7 @@ Everything that cannot be mapped exactly is reported as a warning on standard er
 ## Limits
 
 - Only the response is generated: no request body, no conversion from the model to the API.
-- Generated attributes are all `Computed`. Add plan modifiers yourself where needed (`UseStateForUnknown` for values that do not change, for instance).
+- Response attributes are all `Computed`. In a resource, add plan modifiers yourself where needed (`UseStateForUnknown` for values that do not change, for instance).
 - `-attrs` selects root properties; a nested object is exposed as a whole.
 - JSON documents only (convert YAML with `yq -o=json` first). External `$ref` are not supported.
 
@@ -166,4 +213,4 @@ go test -race ./...
 go test ./internal/gen -update   # regenerate the golden files in internal/e2e
 ```
 
-`internal/e2e` holds the code generated from `testdata/openapi.json`. Its tests compile it against the Plugin Framework, decode sample responses, embed the status model in a resource model, and set the models into data source and resource states, which checks that models and schemas match.
+`internal/e2e` holds the code generated from `testdata/openapi.json`. Its tests compile it against the Plugin Framework, decode sample responses, check the data source arguments, embed the status model in a resource model, and set the models into data source and resource states, which checks that models and schemas match.

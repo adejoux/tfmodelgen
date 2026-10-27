@@ -206,13 +206,25 @@ func TestAttrs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, unwanted := range []string{"ProjectUserModel", "dsschema", `tfsdk:"name"`} {
+	for _, unwanted := range []string{"ProjectUserModel", "rsschema", `tfsdk:"name"`} {
 		if strings.Contains(string(src), unwanted) {
 			t.Errorf("unexpected %q in output", unwanted)
 		}
 	}
 	if !strings.Contains(string(src), "ProjectUserAPI struct") {
 		t.Error("API structs must stay complete")
+	}
+	// The path parameter id is not an exposed attribute: it gets its own
+	// data source argument.
+	var id *Param
+	for _, p := range ep.Params {
+		if p.Name == "id" {
+			id = p
+		}
+	}
+	if id == nil || id.Field != nil || id.TFName != "id" || id.ModelGoName != "ID" ||
+		!strings.Contains(string(src), "type ProjectDataSourceModel struct") {
+		t.Errorf("data source argument id: %+v", id)
 	}
 
 	if _, err := Build(doc, Options{Path: "/projects/{id}", Attrs: []string{"state"}}); err == nil ||

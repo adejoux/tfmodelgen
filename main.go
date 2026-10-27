@@ -34,8 +34,10 @@ Generates, from the JSON response of an OpenAPI 3.x operation:
   - Go structs decoding the API response, with nil-safe getters and enum
     constants,
   - request helpers building the path and the query (<Name>Path, <Name>Query),
-  - a Terraform Plugin Framework model, embeddable in a resource model, with
-    its schema attributes and a FromAPI conversion. -attrs restricts it to
+  - Terraform Plugin Framework models with a FromAPI conversion: a data
+    source model and schema whose arguments are the request parameters
+    (-schema datasource), and/or a model to embed in a resource model with
+    its computed attributes (-schema resource). -attrs restricts them to
     the properties the provider exposes, such as status.
 
 Without -path, lists the operations of -method.
@@ -53,7 +55,7 @@ Flags:
 		pkg       = fs.String("package", "provider", "Go package of the generated file")
 		out       = fs.String("out", ".", "output directory, or - for standard output")
 		file      = fs.String("file", "", "output file name (default: <name>_model_gen.go)")
-		schema    = fs.String("schema", "resource", "schema attributes to generate: resource, datasource, both or none")
+		schema    = fs.String("schema", "datasource", "schemas to generate: datasource, resource, both or none")
 		attrs     = fs.String("attrs", "", "comma-separated root response properties exposed as Terraform attributes, e.g. status (default: all)")
 		itemsAttr = fs.String("items-attr", "items", "attribute holding a response that is not an object, e.g. an array")
 	)

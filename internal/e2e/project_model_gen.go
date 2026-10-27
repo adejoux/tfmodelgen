@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -342,8 +343,8 @@ func (q ProjectQuery) Values() url.Values {
 }
 
 // ProjectModel holds the Terraform attributes read from the GET /projects/{id} response.
-// Embed it by value in a resource or data source model; FromAPI is then
-// promoted to that model.
+// Embed it by value in a resource model to store these attributes; FromAPI
+// is then promoted to that model. ProjectDataSourceModel embeds it too.
 type ProjectModel struct {
 	CreatedAt   types.String  `tfsdk:"created_at"`
 	UpdatedAt   types.String  `tfsdk:"updated_at"`
@@ -426,10 +427,30 @@ func (ProjectQuotaModel) AttrTypes() map[string]attr.Type {
 	}
 }
 
-// ProjectDataSourceAttributes returns the data source attributes of ProjectModel, all computed.
-// Merge them into the schema of the data source that embeds ProjectModel.
+// ProjectDataSourceModel is the model of a data source reading GET /projects/{id}: its
+// arguments are the request parameters (see APIPath and APIQuery), its
+// computed attributes come from ProjectModel.
+type ProjectDataSourceModel struct {
+	Expand types.Bool `tfsdk:"expand"`
+	ProjectModel
+}
+
+// ProjectDataSourceSchema returns the schema of a data source reading GET /projects/{id}.
+func ProjectDataSourceSchema() dsschema.Schema {
+	return dsschema.Schema{
+		Description: "Get a project.",
+		Attributes:  ProjectDataSourceAttributes(),
+	}
+}
+
+// ProjectDataSourceAttributes returns the attributes of ProjectDataSourceModel: the
+// request parameters as arguments, and the computed response attributes.
 func ProjectDataSourceAttributes() map[string]dsschema.Attribute {
 	return map[string]dsschema.Attribute{
+		"expand": dsschema.BoolAttribute{
+			Optional:    true,
+			Description: "Include the members in the response.",
+		},
 		"created_at": dsschema.StringAttribute{
 			Computed:    true,
 			Description: "Creation time.",
@@ -438,7 +459,8 @@ func ProjectDataSourceAttributes() map[string]dsschema.Attribute {
 			Computed: true,
 		},
 		"id": dsschema.StringAttribute{
-			Computed: true,
+			Required:    true,
+			Description: "Project identifier.",
 		},
 		"name": dsschema.StringAttribute{
 			Computed:    true,
@@ -560,7 +582,7 @@ func projectQuotaDataSourceAttributes() map[string]dsschema.Attribute {
 	}
 }
 
-// ProjectResourceAttributes returns the resource attributes of ProjectModel, all computed.
+// ProjectResourceAttributes returns the attributes of ProjectModel, all computed.
 // Merge them into the schema of the resource that embeds ProjectModel.
 func ProjectResourceAttributes() map[string]rsschema.Attribute {
 	return map[string]rsschema.Attribute{
@@ -913,4 +935,31 @@ func projectQuotaFromAPI(ctx context.Context, in *ProjectQuotaAPI) (types.Object
 	})
 	diags.Append(d...)
 	return v, diags
+}
+
+// FromAPI sets the computed attributes from a GET /projects/{id} response. Arguments
+// keep their configured values, as Terraform requires.
+func (m *ProjectDataSourceModel) FromAPI(ctx context.Context, in *ProjectAPI) diag.Diagnostics {
+	arg0 := m.ID
+	diags := m.ProjectModel.FromAPI(ctx, in)
+	m.ID = arg0
+	return diags
+}
+
+// APIPath returns the request path of GET /projects/{id} built from the data source arguments.
+func (m *ProjectDataSourceModel) APIPath() (string, error) {
+	if m.ID.IsNull() || m.ID.IsUnknown() {
+		return "", errors.New("attribute \"id\" is required to build the request path")
+	}
+	return ProjectPath(m.ID.ValueString()), nil
+}
+
+// APIQuery returns the query parameters of GET /projects/{id} set in the data source arguments.
+func (m *ProjectDataSourceModel) APIQuery() url.Values {
+	var q ProjectQuery
+	if !m.Expand.IsNull() && !m.Expand.IsUnknown() {
+		v := m.Expand.ValueBool()
+		q.Expand = &v
+	}
+	return q.Values()
 }

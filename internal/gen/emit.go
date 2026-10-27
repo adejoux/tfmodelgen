@@ -23,7 +23,7 @@ const (
 type EmitOptions struct {
 	Package  string
 	SpecName string     // shown in the generated header
-	Schema   SchemaKind // default SchemaResource
+	Schema   SchemaKind // default SchemaDataSource
 }
 
 const (
@@ -42,6 +42,7 @@ type emitter struct {
 	imports   map[string]bool
 	reachable map[*ObjectType]bool // nested objects behind exposed attributes
 	consts    map[string]bool
+	paramOf   map[*Field]*Param // response attributes carrying a data source argument
 }
 
 func (e *emitter) p(format string, args ...any) {
@@ -57,15 +58,22 @@ func Emit(ep *Endpoint, o EmitOptions) ([]byte, error) {
 		o.Package = "provider"
 	}
 	if o.Schema == "" {
-		o.Schema = SchemaResource
+		o.Schema = SchemaDataSource
 	}
 	switch o.Schema {
 	case SchemaNone, SchemaDataSource, SchemaResource, SchemaBoth:
 	default:
 		return nil, fmt.Errorf("unknown schema kind %q", o.Schema)
 	}
-	e := &emitter{ep: ep, imports: map[string]bool{}, consts: map[string]bool{}}
+	e := &emitter{ep: ep, imports: map[string]bool{}, consts: map[string]bool{}, paramOf: map[*Field]*Param{}}
+	for _, p := range ep.Params {
+		if p.Field != nil {
+			e.paramOf[p.Field] = p
+		}
+	}
 	e.findReachable()
+	dataSource := o.Schema == SchemaDataSource || o.Schema == SchemaBoth
+	resource := o.Schema == SchemaResource || o.Schema == SchemaBoth
 	e.use("context")
 	e.use("encoding/json")
 	e.use("fmt")
@@ -83,15 +91,19 @@ func Emit(ep *Endpoint, o EmitOptions) ([]byte, error) {
 	for _, obj := range e.models() {
 		e.modelType(obj)
 	}
-	if o.Schema == SchemaDataSource || o.Schema == SchemaBoth {
+	if dataSource {
+		e.dataSourceModel()
 		e.schemas(fwDSSchema, "DataSource")
 	}
-	if o.Schema == SchemaResource || o.Schema == SchemaBoth {
+	if resource {
 		e.schemas(fwRSSchema, "Resource")
 	}
 	e.fromAPI()
 	for _, obj := range e.models()[1:] {
 		e.objectFromAPI(obj)
+	}
+	if dataSource {
+		e.dataSourceRequest()
 	}
 
 	var out bytes.Buffer
@@ -455,8 +467,8 @@ func (e *emitter) attrType(n *Node) string {
 func (e *emitter) modelType(obj *ObjectType) {
 	if obj == e.root() {
 		e.p("// %sModel holds the Terraform attributes read from the %s response.", obj.Name, e.endpoint())
-		e.p("// Embed it by value in a resource or data source model; FromAPI is then")
-		e.p("// promoted to that model.")
+		e.p("// Embed it by value in a resource model to store these attributes; FromAPI")
+		e.p("// is then promoted to that model. %sDataSourceModel embeds it too.", obj.Name)
 	} else {
 		e.p("// %sModel is the Terraform model of %sAPI.", obj.Name, obj.Name)
 	}
@@ -485,20 +497,73 @@ func (e *emitter) schemas(pkgPath, kind string) {
 	e.use(pkgPath)
 	pkg := importAliases[pkgPath]
 	root := e.root()
-	label := map[string]string{"DataSource": "data source", "Resource": "resource"}[kind]
 
-	e.p("// %s%sAttributes returns the %s attributes of %sModel, all computed.", root.Name, kind, label, root.Name)
-	e.p("// Merge them into the schema of the %s that embeds %sModel.", label, root.Name)
+	if kind == "DataSource" {
+		e.p("// %sDataSourceSchema returns the schema of a data source reading %s.", root.Name, e.endpoint())
+		e.p("func %sDataSourceSchema() %s.Schema {", root.Name, pkg)
+		e.p("return %s.Schema{", pkg)
+		if root.Desc != "" {
+			e.p("Description: %s,", strconv.Quote(root.Desc))
+		}
+		e.p("Attributes: %sDataSourceAttributes(),", root.Name)
+		e.p("}")
+		e.p("}")
+		e.p("")
+		e.p("// %sDataSourceAttributes returns the attributes of %sDataSourceModel: the", root.Name, root.Name)
+		e.p("// request parameters as arguments, and the computed response attributes.")
+	} else {
+		e.p("// %sResourceAttributes returns the attributes of %sModel, all computed.", root.Name, root.Name)
+		e.p("// Merge them into the schema of the resource that embeds %sModel.", root.Name)
+	}
 	for _, obj := range e.models() {
 		e.p("func %s() map[string]%s.Attribute {", e.attrsFunc(obj, kind), pkg)
 		e.p("return map[string]%s.Attribute{", pkg)
+		if obj == root && kind == "DataSource" {
+			for _, p := range e.ep.Params {
+				if p.Field == nil {
+					e.p("%q: %s,", p.TFName, e.paramAttribute(pkg, p))
+				}
+			}
+		}
 		for _, f := range e.exposed(obj) {
-			e.p("%q: %s,", f.TFName, e.attribute(pkg, kind, f))
+			var p *Param
+			if obj == root && kind == "DataSource" {
+				p = e.paramOf[f]
+			}
+			e.p("%q: %s,", f.TFName, e.attribute(pkg, kind, f, p))
 		}
 		e.p("}")
 		e.p("}")
 		e.p("")
 	}
+}
+
+// argumentProps returns the schema properties of a data source argument.
+func argumentProps(p *Param, computed bool) []string {
+	switch {
+	case p.Required:
+		return []string{"Required: true"}
+	case computed:
+		return []string{"Optional: true", "Computed: true"}
+	default:
+		return []string{"Optional: true"}
+	}
+}
+
+func scalarAttribute(k Kind) string {
+	return map[Kind]string{KString: "StringAttribute", KJSON: "StringAttribute", KInt: "Int64Attribute",
+		KFloat: "Float64Attribute", KBool: "BoolAttribute"}[k]
+}
+
+func (e *emitter) paramAttribute(pkg string, p *Param) string {
+	props := argumentProps(p, false)
+	if p.Desc != "" {
+		props = append(props, "Description: "+strconv.Quote(p.Desc))
+	}
+	if p.Deprecated {
+		props = append(props, `DeprecationMessage: "Deprecated by the API."`)
+	}
+	return pkg + "." + scalarAttribute(p.Node.Kind) + "{\n" + strings.Join(props, ",\n") + ",\n}"
 }
 
 func (e *emitter) attrsFunc(obj *ObjectType, kind string) string {
@@ -508,10 +573,17 @@ func (e *emitter) attrsFunc(obj *ObjectType, kind string) string {
 	return lowerFirst(obj.Name) + kind + "Attributes"
 }
 
-func (e *emitter) attribute(pkg, kind string, f *Field) string {
+// attribute returns the schema of a response attribute. p is the data
+// source argument it also carries, if any.
+func (e *emitter) attribute(pkg, kind string, f *Field, p *Param) string {
 	props := []string{"Computed: true"}
-	if f.Desc != "" {
-		props = append(props, "Description: "+strconv.Quote(f.Desc))
+	desc := f.Desc
+	if p != nil {
+		props = argumentProps(p, true)
+		desc = firstNonEmpty(f.Desc, p.Desc)
+	}
+	if desc != "" {
+		props = append(props, "Description: "+strconv.Quote(desc))
 	}
 	if f.Sensitive {
 		props = append(props, "Sensitive: true")
@@ -523,14 +595,8 @@ func (e *emitter) attribute(pkg, kind string, f *Field) string {
 	n := f.Node
 	typ := ""
 	switch n.Kind {
-	case KString, KJSON:
-		typ = "StringAttribute"
-	case KInt:
-		typ = "Int64Attribute"
-	case KFloat:
-		typ = "Float64Attribute"
-	case KBool:
-		typ = "BoolAttribute"
+	case KString, KJSON, KInt, KFloat, KBool:
+		typ = scalarAttribute(n.Kind)
 	case KObject:
 		typ = "SingleNestedAttribute"
 		props = append(props, "Attributes: "+e.attrsFunc(n.Object, kind)+"()")
@@ -665,4 +731,100 @@ func (e *emitter) convert(dst, src string, n *Node, ptr bool, depth int) {
 		e.p("%s = v%d", dst, depth)
 		e.p("}")
 	}
+}
+
+// dataSourceModel writes the model of a data source: the parameters that are
+// not response attributes, and the embedded response model.
+func (e *emitter) dataSourceModel() {
+	root := e.root()
+	e.p("// %sDataSourceModel is the model of a data source reading %s: its", root.Name, e.endpoint())
+	e.p("// arguments are the request parameters (see APIPath and APIQuery), its")
+	e.p("// computed attributes come from %sModel.", root.Name)
+	e.p("type %sDataSourceModel struct {", root.Name)
+	for _, p := range e.ep.Params {
+		if p.Field == nil {
+			e.p("%s %s `tfsdk:%q`", p.ModelGoName, modelGoType(p.Node), p.TFName)
+		}
+	}
+	e.p("%sModel", root.Name)
+	e.p("}")
+	e.p("")
+}
+
+func (e *emitter) argField(p *Param) string {
+	if p.Field != nil {
+		return "m." + p.Field.GoName
+	}
+	return "m." + p.ModelGoName
+}
+
+func valueMethod(k Kind) string {
+	return map[Kind]string{KString: "ValueString", KInt: "ValueInt64", KFloat: "ValueFloat64", KBool: "ValueBool"}[k]
+}
+
+// dataSourceRequest writes FromAPI, APIPath and APIQuery on the data source
+// model.
+func (e *emitter) dataSourceRequest() {
+	root := e.root()
+	var bound []*Param
+	for _, p := range e.ep.Params {
+		if p.Field != nil {
+			bound = append(bound, p)
+		}
+	}
+	if len(bound) > 0 {
+		e.p("// FromAPI sets the computed attributes from a %s response. Arguments", e.endpoint())
+		e.p("// keep their configured values, as Terraform requires.")
+		e.p("func (m *%sDataSourceModel) FromAPI(ctx context.Context, in *%sAPI) diag.Diagnostics {", root.Name, root.Name)
+		for i, p := range bound {
+			e.p("arg%d := %s", i, e.argField(p))
+		}
+		e.p("diags := m.%sModel.FromAPI(ctx, in)", root.Name)
+		for i, p := range bound {
+			e.p("%s = arg%d", e.argField(p), i)
+		}
+		e.p("return diags")
+		e.p("}")
+		e.p("")
+	}
+	var args []string
+	var query []*Param
+	e.p("// APIPath returns the request path of %s built from the data source arguments.", e.endpoint())
+	e.p("func (m *%sDataSourceModel) APIPath() (string, error) {", root.Name)
+	for _, p := range e.ep.Params {
+		if p.In != "path" {
+			query = append(query, p)
+			continue
+		}
+		field := e.argField(p)
+		e.use("errors")
+		e.p("if %s.IsNull() || %s.IsUnknown() {", field, field)
+		e.p("return \"\", errors.New(%q)", fmt.Sprintf("attribute %q is required to build the request path", p.TFName))
+		e.p("}")
+		args = append(args, field+"."+valueMethod(p.Node.Kind)+"()")
+	}
+	e.p("return %sPath(%s), nil", root.Name, strings.Join(args, ", "))
+	e.p("}")
+	e.p("")
+	if len(query) == 0 {
+		return
+	}
+	e.p("// APIQuery returns the query parameters of %s set in the data source arguments.", e.endpoint())
+	e.p("func (m *%sDataSourceModel) APIQuery() url.Values {", root.Name)
+	e.p("var q %sQuery", root.Name)
+	for _, p := range query {
+		field := e.argField(p)
+		value := field + "." + valueMethod(p.Node.Kind) + "()"
+		if p.Required {
+			e.p("q.%s = %s", p.GoName, value)
+			continue
+		}
+		e.p("if !%s.IsNull() && !%s.IsUnknown() {", field, field)
+		e.p("v := %s", value)
+		e.p("q.%s = &v", p.GoName)
+		e.p("}")
+	}
+	e.p("return q.Values()")
+	e.p("}")
+	e.p("")
 }

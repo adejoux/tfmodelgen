@@ -340,14 +340,14 @@ func (q ProjectStatusQuery) Values() url.Values {
 }
 
 // ProjectStatusModel holds the Terraform attributes read from the GET /projects/{id} response.
-// Embed it by value in a resource or data source model; FromAPI is then
-// promoted to that model.
+// Embed it by value in a resource model to store these attributes; FromAPI
+// is then promoted to that model. ProjectStatusDataSourceModel embeds it too.
 type ProjectStatusModel struct {
 	UpdatedAt types.String `tfsdk:"updated_at"`
 	Status    types.String `tfsdk:"status"`
 }
 
-// ProjectStatusResourceAttributes returns the resource attributes of ProjectStatusModel, all computed.
+// ProjectStatusResourceAttributes returns the attributes of ProjectStatusModel, all computed.
 // Merge them into the schema of the resource that embeds ProjectStatusModel.
 func ProjectStatusResourceAttributes() map[string]rsschema.Attribute {
 	return map[string]rsschema.Attribute{

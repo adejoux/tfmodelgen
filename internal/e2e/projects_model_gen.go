@@ -81,8 +81,8 @@ func (q ProjectsQuery) Values() url.Values {
 }
 
 // ProjectsModel holds the Terraform attributes read from the GET /projects response.
-// Embed it by value in a resource or data source model; FromAPI is then
-// promoted to that model.
+// Embed it by value in a resource model to store these attributes; FromAPI
+// is then promoted to that model. ProjectsDataSourceModel embeds it too.
 type ProjectsModel struct {
 	Items types.List `tfsdk:"items"`
 }
@@ -103,10 +103,33 @@ func (ProjectsProjectSummaryModel) AttrTypes() map[string]attr.Type {
 	}
 }
 
-// ProjectsDataSourceAttributes returns the data source attributes of ProjectsModel, all computed.
-// Merge them into the schema of the data source that embeds ProjectsModel.
+// ProjectsDataSourceModel is the model of a data source reading GET /projects: its
+// arguments are the request parameters (see APIPath and APIQuery), its
+// computed attributes come from ProjectsModel.
+type ProjectsDataSourceModel struct {
+	Limit types.Int64  `tfsdk:"limit"`
+	Owner types.String `tfsdk:"owner"`
+	ProjectsModel
+}
+
+// ProjectsDataSourceSchema returns the schema of a data source reading GET /projects.
+func ProjectsDataSourceSchema() dsschema.Schema {
+	return dsschema.Schema{
+		Description: "List projects.",
+		Attributes:  ProjectsDataSourceAttributes(),
+	}
+}
+
+// ProjectsDataSourceAttributes returns the attributes of ProjectsDataSourceModel: the
+// request parameters as arguments, and the computed response attributes.
 func ProjectsDataSourceAttributes() map[string]dsschema.Attribute {
 	return map[string]dsschema.Attribute{
+		"limit": dsschema.Int64Attribute{
+			Optional: true,
+		},
+		"owner": dsschema.StringAttribute{
+			Required: true,
+		},
 		"items": dsschema.ListNestedAttribute{
 			Computed:     true,
 			NestedObject: dsschema.NestedAttributeObject{Attributes: projectsProjectSummaryDataSourceAttributes()},
@@ -128,7 +151,7 @@ func projectsProjectSummaryDataSourceAttributes() map[string]dsschema.Attribute 
 	}
 }
 
-// ProjectsResourceAttributes returns the resource attributes of ProjectsModel, all computed.
+// ProjectsResourceAttributes returns the attributes of ProjectsModel, all computed.
 // Merge them into the schema of the resource that embeds ProjectsModel.
 func ProjectsResourceAttributes() map[string]rsschema.Attribute {
 	return map[string]rsschema.Attribute{
@@ -198,4 +221,20 @@ func projectsProjectSummaryFromAPI(ctx context.Context, in *ProjectsProjectSumma
 	})
 	diags.Append(d...)
 	return v, diags
+}
+
+// APIPath returns the request path of GET /projects built from the data source arguments.
+func (m *ProjectsDataSourceModel) APIPath() (string, error) {
+	return ProjectsPath(), nil
+}
+
+// APIQuery returns the query parameters of GET /projects set in the data source arguments.
+func (m *ProjectsDataSourceModel) APIQuery() url.Values {
+	var q ProjectsQuery
+	if !m.Limit.IsNull() && !m.Limit.IsUnknown() {
+		v := m.Limit.ValueInt64()
+		q.Limit = &v
+	}
+	q.Owner = m.Owner.ValueString()
+	return q.Values()
 }

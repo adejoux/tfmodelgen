@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	dsschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	rsschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -106,35 +105,83 @@ func TestProjectModelMatchesSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var m ProjectModel
-	if d := m.FromAPI(ctx, in); d.HasError() {
-		t.Fatal(d)
-	}
 
-	dsSchema := dsschema.Schema{Attributes: ProjectDataSourceAttributes()}
-	if d := dsSchema.ValidateImplementation(ctx); d.HasError() {
-		t.Fatalf("data source schema: %v", d)
-	}
+	// Resource side: ProjectModel against the computed attributes.
 	rsSchema := rsschema.Schema{Attributes: ProjectResourceAttributes()}
 	if d := rsSchema.ValidateImplementation(ctx); d.HasError() {
 		t.Fatalf("resource schema: %v", d)
 	}
-
-	states := map[string]tfsdk.State{
-		"data source": {Schema: dsSchema, Raw: tftypes.NewValue(dsSchema.Type().TerraformType(ctx), nil)},
-		"resource":    {Schema: rsSchema, Raw: tftypes.NewValue(rsSchema.Type().TerraformType(ctx), nil)},
+	var m ProjectModel
+	if d := m.FromAPI(ctx, in); d.HasError() {
+		t.Fatal(d)
 	}
-	for name, state := range states {
-		if d := state.Set(ctx, &m); d.HasError() {
-			t.Fatalf("%s: set: %v", name, d)
-		}
-		var back ProjectModel
-		if d := state.Get(ctx, &back); d.HasError() {
-			t.Fatalf("%s: get: %v", name, d)
-		}
-		if !back.Members.Equal(m.Members) || !back.Quotas.Equal(m.Quotas) || !back.Settings.Equal(m.Settings) {
-			t.Fatalf("%s: round trip changed the model", name)
-		}
+	rsState := tfsdk.State{Schema: rsSchema, Raw: tftypes.NewValue(rsSchema.Type().TerraformType(ctx), nil)}
+	if d := rsState.Set(ctx, &m); d.HasError() {
+		t.Fatalf("resource: set: %v", d)
+	}
+
+	// Data source side: ProjectDataSourceModel against the full schema.
+	dsSchema := ProjectDataSourceSchema()
+	if d := dsSchema.ValidateImplementation(ctx); d.HasError() {
+		t.Fatalf("data source schema: %v", d)
+	}
+	ds := ProjectDataSourceModel{Expand: types.BoolValue(true)}
+	ds.ID = types.StringValue("p-1")
+	if d := ds.FromAPI(ctx, in); d.HasError() {
+		t.Fatal(d)
+	}
+	dsState := tfsdk.State{Schema: dsSchema, Raw: tftypes.NewValue(dsSchema.Type().TerraformType(ctx), nil)}
+	if d := dsState.Set(ctx, &ds); d.HasError() {
+		t.Fatalf("data source: set: %v", d)
+	}
+	var back ProjectDataSourceModel
+	if d := dsState.Get(ctx, &back); d.HasError() {
+		t.Fatalf("data source: get: %v", d)
+	}
+	if !back.Members.Equal(ds.Members) || !back.Quotas.Equal(ds.Quotas) || !back.Expand.Equal(ds.Expand) {
+		t.Fatal("data source: round trip changed the model")
+	}
+}
+
+func TestDataSourceArguments(t *testing.T) {
+	ctx := context.Background()
+	s := ProjectDataSourceSchema()
+	if a := s.Attributes["id"]; !a.IsRequired() || a.IsComputed() {
+		t.Fatal("id must be a required argument")
+	}
+	if a := s.Attributes["expand"]; !a.IsOptional() || a.IsComputed() {
+		t.Fatal("expand must be an optional argument")
+	}
+	if a := s.Attributes["name"]; !a.IsComputed() || a.IsOptional() || a.IsRequired() {
+		t.Fatal("name must be computed")
+	}
+
+	var ds ProjectDataSourceModel
+	ds.ID = types.StringValue("p 1")
+	ds.Expand = types.BoolValue(false)
+	if p, err := ds.APIPath(); err != nil || p != "/projects/p%201" {
+		t.Fatalf("path = %q, %v", p, err)
+	}
+	if q := ds.APIQuery().Encode(); q != "expand=false" {
+		t.Fatalf("query = %q", q)
+	}
+
+	// The argument keeps its configured value even when the response omits
+	// or changes it.
+	in, err := DecodeProjectAPI([]byte(`{"id":"normalised","name":"billing"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := ds.FromAPI(ctx, in); d.HasError() {
+		t.Fatal(d)
+	}
+	if ds.ID.ValueString() != "p 1" || ds.Name.ValueString() != "billing" {
+		t.Fatalf("model: %+v", ds)
+	}
+
+	var empty ProjectDataSourceModel
+	if _, err := empty.APIPath(); err == nil {
+		t.Fatal("null id accepted")
 	}
 }
 
@@ -181,7 +228,7 @@ func TestProjectsArrayResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var m ProjectsModel
+	m := ProjectsDataSourceModel{Owner: types.StringValue("u-1"), Limit: types.Int64Null()}
 	if d := m.FromAPI(ctx, in); d.HasError() {
 		t.Fatal(d)
 	}
@@ -193,7 +240,10 @@ func TestProjectsArrayResponse(t *testing.T) {
 		t.Fatalf("items: %+v", items)
 	}
 
-	s := dsschema.Schema{Attributes: ProjectsDataSourceAttributes()}
+	if q := m.APIQuery().Encode(); q != "owner=u-1" {
+		t.Fatalf("query = %q", q)
+	}
+	s := ProjectsDataSourceSchema()
 	state := tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(ctx), nil)}
 	if d := state.Set(ctx, &m); d.HasError() {
 		t.Fatal(d)
