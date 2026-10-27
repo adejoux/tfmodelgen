@@ -177,6 +177,35 @@ var settings ProjectSettingsModel
 diags := m.Settings.As(ctx, &settings, basetypes.ObjectAsOptions{})
 ```
 
+## Converting objects one by one
+
+Every nested model, list elements included, has its own conversion
+methods: `FromAPI` fills the model from one API object, `ObjectValue()`
+returns it as a `types.Object`, `ObjectType()` gives its Terraform type.
+Convert each element, filter or enrich it, then build the list:
+
+```go
+api, err := DecodeProjectsAPI(body) // []*ProjectsProjectSummaryAPI
+
+var items []ProjectsProjectSummaryModel
+for _, obj := range *api {
+	if obj.GetStatus() == "deleted" { // any filter
+		continue
+	}
+	var item ProjectsProjectSummaryModel
+	resp.Diagnostics.Append(item.FromAPI(ctx, obj)...)
+	items = append(items, item)
+}
+
+list, diags := types.ListValueFrom(ctx, ProjectsProjectSummaryModel{}.ObjectType(), items)
+resp.Diagnostics.Append(diags...)
+m.Items = list
+```
+
+`types.SetValueFrom` and `types.MapValueFrom` work the same way. To append
+`attr.Value` elements instead, use `item.ObjectValue()` and
+`types.ListValue(ProjectsProjectSummaryModel{}.ObjectType(), elems)`.
+
 ## Mapping
 
 | OpenAPI | API struct | Terraform model | Schema |

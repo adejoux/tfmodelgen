@@ -103,6 +103,12 @@ func (ProjectsProjectSummaryModel) AttrTypes() map[string]attr.Type {
 	}
 }
 
+// ObjectType returns the Terraform type of ProjectsProjectSummaryModel, for instance the
+// element type of a list built with types.ListValueFrom.
+func (m ProjectsProjectSummaryModel) ObjectType() types.ObjectType {
+	return types.ObjectType{AttrTypes: m.AttrTypes()}
+}
+
 // ProjectsDataSourceModel is the model of a data source reading GET /projects: its
 // arguments are the request parameters (see APIPath and APIQuery), its
 // computed attributes come from ProjectsModel.
@@ -203,22 +209,36 @@ func (m *ProjectsModel) FromAPI(ctx context.Context, in *ProjectsAPI) diag.Diagn
 	return diags
 }
 
-// projectsProjectSummaryFromAPI converts a ProjectsProjectSummaryAPI into an object value; nil gives a null object.
-func projectsProjectSummaryFromAPI(ctx context.Context, in *ProjectsProjectSummaryAPI) (types.Object, diag.Diagnostics) {
-	attrTypes := ProjectsProjectSummaryModel{}.AttrTypes()
-	if in == nil {
-		return types.ObjectNull(attrTypes), nil
-	}
+// FromAPI sets the model from a ProjectsProjectSummaryAPI; a nil value gives null attributes.
+func (m *ProjectsProjectSummaryModel) FromAPI(ctx context.Context, in *ProjectsProjectSummaryAPI) diag.Diagnostics {
 	var diags diag.Diagnostics
-	var m ProjectsProjectSummaryModel
+	if in == nil {
+		in = &ProjectsProjectSummaryAPI{}
+	}
 	m.ID = types.StringPointerValue(in.ID)
 	m.Name = types.StringPointerValue(in.Name)
 	m.Owner = types.StringPointerValue(in.Owner)
-	v, d := types.ObjectValue(attrTypes, map[string]attr.Value{
+	return diags
+}
+
+// ObjectValue returns the model as an object value, for instance to append
+// it to the elements of a list.
+func (m ProjectsProjectSummaryModel) ObjectValue() (types.Object, diag.Diagnostics) {
+	return types.ObjectValue(m.AttrTypes(), map[string]attr.Value{
 		"id":    m.ID,
 		"name":  m.Name,
 		"owner": m.Owner,
 	})
+}
+
+// projectsProjectSummaryFromAPI converts a ProjectsProjectSummaryAPI into an object value; nil gives a null object.
+func projectsProjectSummaryFromAPI(ctx context.Context, in *ProjectsProjectSummaryAPI) (types.Object, diag.Diagnostics) {
+	if in == nil {
+		return types.ObjectNull(ProjectsProjectSummaryModel{}.AttrTypes()), nil
+	}
+	var m ProjectsProjectSummaryModel
+	diags := m.FromAPI(ctx, in)
+	v, d := m.ObjectValue()
 	diags.Append(d...)
 	return v, diags
 }

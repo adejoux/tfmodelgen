@@ -385,6 +385,12 @@ func (ProjectUserModel) AttrTypes() map[string]attr.Type {
 	}
 }
 
+// ObjectType returns the Terraform type of ProjectUserModel, for instance the
+// element type of a list built with types.ListValueFrom.
+func (m ProjectUserModel) ObjectType() types.ObjectType {
+	return types.ObjectType{AttrTypes: m.AttrTypes()}
+}
+
 // ProjectSettingsNotificationsModel is the Terraform model of ProjectSettingsNotificationsAPI.
 type ProjectSettingsNotificationsModel struct {
 	Email    types.Bool `tfsdk:"email"`
@@ -397,6 +403,12 @@ func (ProjectSettingsNotificationsModel) AttrTypes() map[string]attr.Type {
 		"email":    types.BoolType,
 		"webhooks": types.ListType{ElemType: types.StringType},
 	}
+}
+
+// ObjectType returns the Terraform type of ProjectSettingsNotificationsModel, for instance the
+// element type of a list built with types.ListValueFrom.
+func (m ProjectSettingsNotificationsModel) ObjectType() types.ObjectType {
+	return types.ObjectType{AttrTypes: m.AttrTypes()}
 }
 
 // ProjectSettingsModel is the Terraform model of ProjectSettingsAPI.
@@ -413,6 +425,12 @@ func (ProjectSettingsModel) AttrTypes() map[string]attr.Type {
 	}
 }
 
+// ObjectType returns the Terraform type of ProjectSettingsModel, for instance the
+// element type of a list built with types.ListValueFrom.
+func (m ProjectSettingsModel) ObjectType() types.ObjectType {
+	return types.ObjectType{AttrTypes: m.AttrTypes()}
+}
+
 // ProjectQuotaModel is the Terraform model of ProjectQuotaAPI.
 type ProjectQuotaModel struct {
 	Limit types.Int64 `tfsdk:"limit"`
@@ -425,6 +443,12 @@ func (ProjectQuotaModel) AttrTypes() map[string]attr.Type {
 		"limit": types.Int64Type,
 		"used":  types.Int64Type,
 	}
+}
+
+// ObjectType returns the Terraform type of ProjectQuotaModel, for instance the
+// element type of a list built with types.ListValueFrom.
+func (m ProjectQuotaModel) ObjectType() types.ObjectType {
+	return types.ObjectType{AttrTypes: m.AttrTypes()}
 }
 
 // ProjectDataSourceModel is the model of a data source reading GET /projects/{id}: its
@@ -847,34 +871,46 @@ func (m *ProjectModel) FromAPI(ctx context.Context, in *ProjectAPI) diag.Diagnos
 	return diags
 }
 
-// projectUserFromAPI converts a ProjectUserAPI into an object value; nil gives a null object.
-func projectUserFromAPI(ctx context.Context, in *ProjectUserAPI) (types.Object, diag.Diagnostics) {
-	attrTypes := ProjectUserModel{}.AttrTypes()
-	if in == nil {
-		return types.ObjectNull(attrTypes), nil
-	}
+// FromAPI sets the model from a ProjectUserAPI; a nil value gives null attributes.
+func (m *ProjectUserModel) FromAPI(ctx context.Context, in *ProjectUserAPI) diag.Diagnostics {
 	var diags diag.Diagnostics
-	var m ProjectUserModel
+	if in == nil {
+		in = &ProjectUserAPI{}
+	}
 	m.ID = types.StringPointerValue(in.ID)
 	m.Email = types.StringPointerValue(in.Email)
 	m.DisplayName = types.StringPointerValue(in.DisplayName)
-	v, d := types.ObjectValue(attrTypes, map[string]attr.Value{
+	return diags
+}
+
+// ObjectValue returns the model as an object value, for instance to append
+// it to the elements of a list.
+func (m ProjectUserModel) ObjectValue() (types.Object, diag.Diagnostics) {
+	return types.ObjectValue(m.AttrTypes(), map[string]attr.Value{
 		"id":           m.ID,
 		"email":        m.Email,
 		"display_name": m.DisplayName,
 	})
+}
+
+// projectUserFromAPI converts a ProjectUserAPI into an object value; nil gives a null object.
+func projectUserFromAPI(ctx context.Context, in *ProjectUserAPI) (types.Object, diag.Diagnostics) {
+	if in == nil {
+		return types.ObjectNull(ProjectUserModel{}.AttrTypes()), nil
+	}
+	var m ProjectUserModel
+	diags := m.FromAPI(ctx, in)
+	v, d := m.ObjectValue()
 	diags.Append(d...)
 	return v, diags
 }
 
-// projectSettingsNotificationsFromAPI converts a ProjectSettingsNotificationsAPI into an object value; nil gives a null object.
-func projectSettingsNotificationsFromAPI(ctx context.Context, in *ProjectSettingsNotificationsAPI) (types.Object, diag.Diagnostics) {
-	attrTypes := ProjectSettingsNotificationsModel{}.AttrTypes()
-	if in == nil {
-		return types.ObjectNull(attrTypes), nil
-	}
+// FromAPI sets the model from a ProjectSettingsNotificationsAPI; a nil value gives null attributes.
+func (m *ProjectSettingsNotificationsModel) FromAPI(ctx context.Context, in *ProjectSettingsNotificationsAPI) diag.Diagnostics {
 	var diags diag.Diagnostics
-	var m ProjectSettingsNotificationsModel
+	if in == nil {
+		in = &ProjectSettingsNotificationsAPI{}
+	}
 	m.Email = types.BoolPointerValue(in.Email)
 	if in.Webhooks == nil {
 		m.Webhooks = types.ListNull(types.StringType)
@@ -889,50 +925,94 @@ func projectSettingsNotificationsFromAPI(ctx context.Context, in *ProjectSetting
 		diags.Append(d0...)
 		m.Webhooks = v0
 	}
-	v, d := types.ObjectValue(attrTypes, map[string]attr.Value{
+	return diags
+}
+
+// ObjectValue returns the model as an object value, for instance to append
+// it to the elements of a list.
+func (m ProjectSettingsNotificationsModel) ObjectValue() (types.Object, diag.Diagnostics) {
+	return types.ObjectValue(m.AttrTypes(), map[string]attr.Value{
 		"email":    m.Email,
 		"webhooks": m.Webhooks,
 	})
+}
+
+// projectSettingsNotificationsFromAPI converts a ProjectSettingsNotificationsAPI into an object value; nil gives a null object.
+func projectSettingsNotificationsFromAPI(ctx context.Context, in *ProjectSettingsNotificationsAPI) (types.Object, diag.Diagnostics) {
+	if in == nil {
+		return types.ObjectNull(ProjectSettingsNotificationsModel{}.AttrTypes()), nil
+	}
+	var m ProjectSettingsNotificationsModel
+	diags := m.FromAPI(ctx, in)
+	v, d := m.ObjectValue()
 	diags.Append(d...)
 	return v, diags
 }
 
-// projectSettingsFromAPI converts a ProjectSettingsAPI into an object value; nil gives a null object.
-func projectSettingsFromAPI(ctx context.Context, in *ProjectSettingsAPI) (types.Object, diag.Diagnostics) {
-	attrTypes := ProjectSettingsModel{}.AttrTypes()
-	if in == nil {
-		return types.ObjectNull(attrTypes), nil
-	}
+// FromAPI sets the model from a ProjectSettingsAPI; a nil value gives null attributes.
+func (m *ProjectSettingsModel) FromAPI(ctx context.Context, in *ProjectSettingsAPI) diag.Diagnostics {
 	var diags diag.Diagnostics
-	var m ProjectSettingsModel
+	if in == nil {
+		in = &ProjectSettingsAPI{}
+	}
 	m.RetentionDays = types.Int64PointerValue(in.RetentionDays)
 	{
 		v0, d0 := projectSettingsNotificationsFromAPI(ctx, in.Notifications)
 		diags.Append(d0...)
 		m.Notifications = v0
 	}
-	v, d := types.ObjectValue(attrTypes, map[string]attr.Value{
+	return diags
+}
+
+// ObjectValue returns the model as an object value, for instance to append
+// it to the elements of a list.
+func (m ProjectSettingsModel) ObjectValue() (types.Object, diag.Diagnostics) {
+	return types.ObjectValue(m.AttrTypes(), map[string]attr.Value{
 		"retention_days": m.RetentionDays,
 		"notifications":  m.Notifications,
 	})
+}
+
+// projectSettingsFromAPI converts a ProjectSettingsAPI into an object value; nil gives a null object.
+func projectSettingsFromAPI(ctx context.Context, in *ProjectSettingsAPI) (types.Object, diag.Diagnostics) {
+	if in == nil {
+		return types.ObjectNull(ProjectSettingsModel{}.AttrTypes()), nil
+	}
+	var m ProjectSettingsModel
+	diags := m.FromAPI(ctx, in)
+	v, d := m.ObjectValue()
 	diags.Append(d...)
 	return v, diags
 }
 
-// projectQuotaFromAPI converts a ProjectQuotaAPI into an object value; nil gives a null object.
-func projectQuotaFromAPI(ctx context.Context, in *ProjectQuotaAPI) (types.Object, diag.Diagnostics) {
-	attrTypes := ProjectQuotaModel{}.AttrTypes()
-	if in == nil {
-		return types.ObjectNull(attrTypes), nil
-	}
+// FromAPI sets the model from a ProjectQuotaAPI; a nil value gives null attributes.
+func (m *ProjectQuotaModel) FromAPI(ctx context.Context, in *ProjectQuotaAPI) diag.Diagnostics {
 	var diags diag.Diagnostics
-	var m ProjectQuotaModel
+	if in == nil {
+		in = &ProjectQuotaAPI{}
+	}
 	m.Limit = types.Int64PointerValue(in.Limit)
 	m.Used = types.Int64PointerValue(in.Used)
-	v, d := types.ObjectValue(attrTypes, map[string]attr.Value{
+	return diags
+}
+
+// ObjectValue returns the model as an object value, for instance to append
+// it to the elements of a list.
+func (m ProjectQuotaModel) ObjectValue() (types.Object, diag.Diagnostics) {
+	return types.ObjectValue(m.AttrTypes(), map[string]attr.Value{
 		"limit": m.Limit,
 		"used":  m.Used,
 	})
+}
+
+// projectQuotaFromAPI converts a ProjectQuotaAPI into an object value; nil gives a null object.
+func projectQuotaFromAPI(ctx context.Context, in *ProjectQuotaAPI) (types.Object, diag.Diagnostics) {
+	if in == nil {
+		return types.ObjectNull(ProjectQuotaModel{}.AttrTypes()), nil
+	}
+	var m ProjectQuotaModel
+	diags := m.FromAPI(ctx, in)
+	v, d := m.ObjectValue()
 	diags.Append(d...)
 	return v, diags
 }

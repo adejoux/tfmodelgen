@@ -495,7 +495,7 @@ func (b *builder) object(s *spec.Schema, hint, where, ref string) (*ObjectType, 
 // checkFieldNames makes Go and Terraform names unique inside an object and
 // avoids clashes with generated methods.
 func (b *builder) checkFieldNames(obj *ObjectType, root bool) {
-	reservedGo := map[string]bool{"AttrTypes": true}
+	reservedGo := map[string]bool{"AttrTypes": true, "ObjectType": true, "ObjectValue": true, "FromAPI": true}
 	if root {
 		reservedGo = map[string]bool{"FromAPI": true}
 	}

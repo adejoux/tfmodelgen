@@ -491,6 +491,12 @@ func (e *emitter) modelType(obj *ObjectType) {
 	e.p("}")
 	e.p("}")
 	e.p("")
+	e.p("// ObjectType returns the Terraform type of %sModel, for instance the", obj.Name)
+	e.p("// element type of a list built with types.ListValueFrom.")
+	e.p("func (m %sModel) ObjectType() types.ObjectType {", obj.Name)
+	e.p("return types.ObjectType{AttrTypes: m.AttrTypes()}")
+	e.p("}")
+	e.p("")
 }
 
 func (e *emitter) schemas(pkgPath, kind string) {
@@ -642,28 +648,42 @@ func (e *emitter) convFunc(obj *ObjectType) string { return lowerFirst(obj.Name)
 
 func (e *emitter) objectFromAPI(obj *ObjectType) {
 	e.use(fwAttr)
-	e.p("// %s converts a %sAPI into an object value; nil gives a null object.", e.convFunc(obj), obj.Name)
-	e.p("func %s(ctx context.Context, in *%sAPI) (types.Object, diag.Diagnostics) {", e.convFunc(obj), obj.Name)
-	e.p("attrTypes := %sModel{}.AttrTypes()", obj.Name)
-	e.p("if in == nil {")
-	e.p("return types.ObjectNull(attrTypes), nil")
-	e.p("}")
-	if len(obj.Fields) == 0 {
-		e.p("return types.ObjectValueMust(attrTypes, map[string]attr.Value{}), nil")
-		e.p("}")
-		e.p("")
-		return
-	}
+	n := obj.Name
+
+	e.p("// FromAPI sets the model from a %sAPI; a nil value gives null attributes.", n)
+	e.p("func (m *%sModel) FromAPI(ctx context.Context, in *%sAPI) diag.Diagnostics {", n, n)
 	e.p("var diags diag.Diagnostics")
-	e.p("var m %sModel", obj.Name)
+	if len(obj.Fields) > 0 {
+		e.p("if in == nil {")
+		e.p("in = &%sAPI{}", n)
+		e.p("}")
+	}
 	for _, f := range obj.Fields {
 		e.convert("m."+f.GoName, "in."+f.GoName, f.Node, true, 0)
 	}
-	e.p("v, d := types.ObjectValue(attrTypes, map[string]attr.Value{")
+	e.p("return diags")
+	e.p("}")
+	e.p("")
+
+	e.p("// ObjectValue returns the model as an object value, for instance to append")
+	e.p("// it to the elements of a list.")
+	e.p("func (m %sModel) ObjectValue() (types.Object, diag.Diagnostics) {", n)
+	e.p("return types.ObjectValue(m.AttrTypes(), map[string]attr.Value{")
 	for _, f := range obj.Fields {
 		e.p("%q: m.%s,", f.TFName, f.GoName)
 	}
 	e.p("})")
+	e.p("}")
+	e.p("")
+
+	e.p("// %s converts a %sAPI into an object value; nil gives a null object.", e.convFunc(obj), n)
+	e.p("func %s(ctx context.Context, in *%sAPI) (types.Object, diag.Diagnostics) {", e.convFunc(obj), n)
+	e.p("if in == nil {")
+	e.p("return types.ObjectNull(%sModel{}.AttrTypes()), nil", n)
+	e.p("}")
+	e.p("var m %sModel", n)
+	e.p("diags := m.FromAPI(ctx, in)")
+	e.p("v, d := m.ObjectValue()")
 	e.p("diags.Append(d...)")
 	e.p("return v, diags")
 	e.p("}")
