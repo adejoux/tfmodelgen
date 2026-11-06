@@ -56,3 +56,50 @@ func TestRunErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestRunPrior(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"prior", "-schema-json", "testdata/provider_schema_v0.json", "-resource", "demo_widget",
+		"-number", "int64", "-types", "ratio=float64", "-package", "provider", "-out", dir,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "widget_schema_v0_gen.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"package provider", "func WidgetSchemaV0()", "Ratio    types.Float64", "func WidgetStateUpgraderV0[T any]"} {
+		if !bytes.Contains(b, []byte(want)) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+func TestRunPriorLists(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"prior", "-schema-json", "testdata/provider_schema_v0.json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "demo_widget  version 0  (registry.terraform.io/adejoux/demo)") {
+		t.Fatalf("listing: %s", stdout.String())
+	}
+}
+
+func TestRunPriorErrors(t *testing.T) {
+	for _, args := range [][]string{
+		{"prior"},
+		{"prior", "-schema-json", "missing.json"},
+		{"prior", "-schema-json", "testdata/openapi.json"},
+		{"prior", "-schema-json", "testdata/provider_schema_v0.json", "-resource", "demo_nope"},
+		{"prior", "-schema-json", "testdata/provider_schema_v0.json", "-resource", "demo_widget", "-types", "ratio"},
+		{"prior", "-schema-json", "testdata/provider_schema_v0.json", "-resource", "demo_widget", "-types", "nope=int64"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code == 0 {
+			t.Errorf("%v: exit 0", args)
+		}
+	}
+}

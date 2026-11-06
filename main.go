@@ -5,6 +5,10 @@
 //
 //	tfmodelgen -spec openapi.json -path /projects/{id} [flags]
 //	tfmodelgen -spec openapi.json            # lists the GET operations
+//	tfmodelgen prior -schema-json v1.json -resource monprov_ma_resource
+//
+// The prior subcommand generates the frozen PriorSchema, model and
+// StateUpgrader of a resource from the schema of a released binary.
 package main
 
 import (
@@ -25,6 +29,9 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "prior" {
+		return runPrior(args[1:], stdout, stderr)
+	}
 	fs := flag.NewFlagSet("tfmodelgen", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
@@ -41,6 +48,9 @@ Generates, from the JSON response of an OpenAPI 3.x operation:
     the properties the provider exposes, such as status.
 
 Without -path, lists the operations of -method.
+
+tfmodelgen prior generates the PriorSchema, model and StateUpgrader of a
+resource from the schema of a released binary: see tfmodelgen prior -h.
 
 Flags:
 `)

@@ -235,11 +235,102 @@ Everything that cannot be mapped exactly is reported as a warning on standard er
 - `-attrs` selects root properties; a nested object is exposed as a whole.
 - JSON documents only (convert YAML with `yq -o=json` first). External `$ref` are not supported.
 
+## Upgrading resource states
+
+When a change of a resource schema needs a state upgrade (a renamed
+attribute, a changed type, a restructured block), the framework decodes the
+stored states with the `PriorSchema` of the matching `StateUpgrader`. That
+schema must describe exactly what the old releases stored: pointing it at
+the current schema, or at helpers shared with it, breaks the upgrade as
+soon as the schema changes again, typically with `Struct defines fields not
+found in object`.
+
+`tfmodelgen prior` generates it from the released binaries. Dump the schema
+of each release whose states must still be upgraded, with the binary of
+that release:
+
+```sh
+mkdir /tmp/v1.2.0 && cd /tmp/v1.2.0
+cat > main.tf <<'TF'
+terraform {
+  required_providers {
+    monprov = { source = "adejoux/monprov", version = "= 1.2.0" }
+  }
+}
+TF
+terraform init   # or a dev_overrides block pointing to the old binary
+terraform providers schema -json > internal/provider/priorschemas/v1.2.0.json
+```
+
+List the resources and their schema versions, then generate the file of one
+resource:
+
+```sh
+tfmodelgen prior -schema-json internal/provider/priorschemas/v1.2.0.json
+# monprov_ma_resource  version 0  (registry.terraform.io/adejoux/monprov)
+
+tfmodelgen prior -schema-json internal/provider/priorschemas/v1.2.0.json \
+  -resource monprov_ma_resource -number int64 -types ratio=float64 \
+  -package provider -out internal/provider
+# monprov_ma_resource v0 -> internal/provider/ma_resource_schema_v0_gen.go
+```
+
+The file holds, for that schema version:
+
+- `MaResourceSchemaV0()`, the frozen schema;
+- `MaResourceModelV0` and its nested models, decoding a stored state: nested
+  objects and single blocks are pointers (nil when null), lists, sets and
+  nested list blocks are slices, maps are maps;
+- `MaResourceStateUpgraderV0(convert)`, a `resource.StateUpgrader` that decodes
+  the prior state, calls `convert` and stores the model it returns.
+
+```go
+func (r *maResource) UpgradeState(context.Context) map[int64]resource.StateUpgrader {
+	return map[int64]resource.StateUpgrader{
+		0: MaResourceStateUpgraderV0(func(ctx context.Context, prior MaResourceModelV0) (maResourceModel, diag.Diagnostics) {
+			return v1ToCurrent(v0ToV1(prior)) // plain Go conversions, chained across versions
+		}),
+		1: MaResourceStateUpgraderV1(func(ctx context.Context, prior MaResourceModelV1) (maResourceModel, diag.Diagnostics) {
+			return v1ToCurrent(prior)
+		}),
+	}
+}
+```
+
+Every key upgrades straight to the current version: generate one file per
+stored version (`v0` from an older release, `v1` from the last one), each
+from the binary that wrote it. Attributes that are new in the current schema
+are set to null by `convert`.
+
+The schema JSON only knows `number`: `-number` (`number`, the exact
+`types.Number`, by default) and `-types path=type` choose `int64` or `float64`
+for the model fields, where `path` is the attribute path (`settings.max_items`;
+collection elements are not part of it). Since the schema and the model are
+generated together, any choice decodes the state; it only changes the Go
+type you convert from. Custom types (`timetypes.RFC3339`, ...) come out as
+their underlying type for the same reason.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `-schema-json` | | Output of `terraform providers schema -json`, or the schema of one resource (required) |
+| `-resource` | | Resource type; without it, resources are listed |
+| `-provider` | | Provider source address or name, when several define the resource |
+| `-name` | type without the provider prefix | Go base name |
+| `-number` | `number` | Type of number attributes: `number`, `int64` or `float64` |
+| `-types` | | Number types by attribute path, `ratio=float64,settings.max_items=int64` |
+| `-package` | `provider` | Go package |
+| `-out` | `.` | Output directory, `-` for standard output |
+| `-file` | `<name>_schema_v<n>_gen.go` | Output file name |
+
+Tuple types and map blocks have no Plugin Framework equivalent and are
+reported as errors.
+
 ## Development
 
 ```sh
 go test -race ./...
 go test ./internal/gen -update   # regenerate the golden files in internal/e2e
+go test ./internal/prior -update # regenerate internal/e2e/widget_schema_v0_gen.go
 ```
 
-`internal/e2e` holds the code generated from `testdata/openapi.json`. Its tests compile it against the Plugin Framework, decode sample responses, check the data source arguments, embed the status model in a resource model, and set the models into data source and resource states, which checks that models and schemas match.
+`internal/e2e` holds the code generated from `testdata/openapi.json`. Its tests compile it against the Plugin Framework, decode sample responses, check the data source arguments, embed the status model in a resource model, and set the models into data source and resource states, which checks that models and schemas match. `widget_schema_v0_gen.go` is generated by `tfmodelgen prior` from `testdata/provider_schema_v0.json`; its test runs `UpgradeResourceState` through a provider server, from a version 0 state to a version 1 schema.
